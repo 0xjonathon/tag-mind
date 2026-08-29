@@ -333,11 +333,11 @@ export default function Home() {
 
   const visualCutoff = useMemo(() => {
     const scores = Object.values(visualScores).filter((score) => typeof score === 'number' && score > 0);
-    if (scores.length === 0) return 0.55;
+    if (scores.length === 0) return 0.50;
     const best = Math.max(...scores);
-    if (best >= 0.75) return Math.max(0.58, best - 0.14);
-    if (best >= 0.60) return Math.max(0.52, best - 0.08);
-    return 0.55;
+    if (best >= 0.75) return Math.max(0.52, best - 0.16);
+    if (best >= 0.60) return Math.max(0.48, best - 0.10);
+    return 0.50;
   }, [visualScores]);
 
   const semanticCutoff = useMemo(() => {

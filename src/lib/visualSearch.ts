@@ -29,8 +29,8 @@ const STRUCTURE_GRID = 8;
 const HOG_GRID = 4;
 const HOG_BINS = 8;
 const HISTOGRAM_BINS = 64;
-const FEATURE_MAX_EDGE = 800;
-const CANDIDATE_MAX_EDGE = 1400;
+const FEATURE_MAX_EDGE = 900;
+const CANDIDATE_MAX_EDGE = 1600;
 const BRIEF_BITS = 256;
 
 type Crop = { x: number; y: number; width: number; height: number };
@@ -50,7 +50,7 @@ const FAST_CIRCLE = [
   [0, 3], [-1, 3], [-2, 2], [-3, 1], [-3, 0], [-3, -1], [-2, -2], [-1, -3],
 ] as const;
 
-// 固定伪随机序列，生成 256 对 BRIEF 采样坐标（归一化半径范围 [-1, 1]）
+// 固定伪随机序列，生成 256 对 BRIEF 采样坐标
 const BASE_BRIEF_PAIRS: ReadonlyArray<readonly [readonly [number, number], readonly [number, number]]> = (() => {
   let state = 0x51f15e;
   const random = () => {
@@ -67,14 +67,14 @@ const BASE_BRIEF_PAIRS: ReadonlyArray<readonly [readonly [number, number], reado
 
 const BASE_CROPS: Crop[] = [
   { x: 0, y: 0, width: 1, height: 1 },
-  { x: 0.06, y: 0.06, width: 0.88, height: 0.88 },
+  { x: 0.05, y: 0.05, width: 0.90, height: 0.90 },
 ];
 
 type IndexDensity = boolean | 'coarse' | 'dense';
 
 function clampCropAroundCenter(centerX: number, centerY: number, width: number, height: number): Crop {
-  const safeWidth = Math.max(0.01, Math.min(1, width));
-  const safeHeight = Math.max(0.01, Math.min(1, height));
+  const safeWidth = Math.max(0.008, Math.min(1, width));
+  const safeHeight = Math.max(0.008, Math.min(1, height));
   return {
     x: Math.max(0, Math.min(1 - safeWidth, centerX - safeWidth / 2)),
     y: Math.max(0, Math.min(1 - safeHeight, centerY - safeHeight / 2)),
@@ -90,7 +90,7 @@ function createIndexCrops(image: HTMLImageElement, density: Exclude<IndexDensity
   const sourceWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
   const imageAspect = sourceWidth / Math.max(1, sourceHeight);
-  const grids = density === 'dense' ? [2, 3, 4] : [2, 3];
+  const grids = density === 'dense' ? [2, 3, 4, 5] : [2, 3];
   const cropAspects = density === 'dense' ? [0.6, 1.0, 1.6] : [1.0, 1.5];
   const crops = [...BASE_CROPS];
 
@@ -192,7 +192,7 @@ function grayAt(raster: GrayRaster, x: number, y: number): number {
   return top * (1 - fy) + bottom * fy;
 }
 
-function fastCornerScore(raster: GrayRaster, x: number, y: number, threshold = 0.048): number {
+function fastCornerScore(raster: GrayRaster, x: number, y: number, threshold = 0.040): number {
   const center = raster.pixels[y * raster.width + x];
   const signs = FAST_CIRCLE.map(([offsetX, offsetY]) => {
     const difference = raster.pixels[(y + offsetY) * raster.width + x + offsetX] - center;
@@ -240,15 +240,14 @@ function describeBinaryFeature(raster: GrayRaster, x: number, y: number): number
 }
 
 function extractLevelFeatures(raster: GrayRaster, scale: number, limit: number): BinaryFeature[] {
-  if (raster.width < 28 || raster.height < 28) return [];
+  if (raster.width < 24 || raster.height < 24) return [];
   const cells = new Map<string, { x: number; y: number; score: number }[]>();
-  const cellSize = 22;
+  const cellSize = 16;
 
-  // 自适应阈值：先用标准阈值，若角点过少则降级重探
-  for (const threshold of [0.048, 0.032]) {
+  for (const threshold of [0.040, 0.025]) {
     cells.clear();
-    for (let y = 11; y < raster.height - 11; y += 2) {
-      for (let x = 11; x < raster.width - 11; x += 2) {
+    for (let y = 8; y < raster.height - 8; y += 2) {
+      for (let x = 8; x < raster.width - 8; x += 2) {
         const score = fastCornerScore(raster, x, y, threshold);
         if (!score) continue;
         const key = `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
@@ -260,7 +259,7 @@ function extractLevelFeatures(raster: GrayRaster, scale: number, limit: number):
       }
     }
     const count = [...cells.values()].reduce((sum, list) => sum + list.length, 0);
-    if (count >= Math.min(24, limit * 0.4)) break;
+    if (count >= Math.min(24, limit * 0.35)) break;
   }
 
   return [...cells.values()]
@@ -278,12 +277,11 @@ function extractLevelFeatures(raster: GrayRaster, scale: number, limit: number):
 function extractLocalFeatureModel(image: HTMLImageElement, crop: Crop, query: boolean): LocalFeatureModel | undefined {
   const base = rasterizeGray(image, crop, query ? FEATURE_MAX_EDGE : CANDIDATE_MAX_EDGE);
   if (!base) return undefined;
-  // 覆盖更宽广的尺度金字塔（从 1.0 到 0.25）以捕获大图中的任意尺寸子元素
   const scales = query ? [1.0, 0.8, 0.64, 0.5, 0.38, 0.28] : [1.0, 0.75, 0.5, 0.35, 0.25];
   const features: BinaryFeature[] = [];
   for (const scale of scales) {
     const raster = scale === 1.0 ? base : resizeGray(base, scale);
-    features.push(...extractLevelFeatures(raster, scale, query ? 90 : 140));
+    features.push(...extractLevelFeatures(raster, scale, query ? 120 : 220));
   }
   return { width: base.width, height: base.height, features };
 }
@@ -305,7 +303,7 @@ function createWorkspace(): DescriptorWorkspace | null {
 /**
  * 提取融合描述符：
  * 1. 64-bin 全局色彩分布直方图（平移不变）
- * 2. 4x4 空间色彩金字塔（抗轻微位移）
+ * 2. 4x4 空间色彩金字塔
  * 3. HOG 梯度方向直方图（4x4 空间区域，8 方向，抓取轮廓与笔画特征）
  * 4. 8x8 结构亮度与对比度
  */
@@ -369,9 +367,10 @@ function describeCrop(image: HTMLImageElement, crop: Crop, workspace?: Descripto
   const totalPixels = SAMPLE_SIZE * SAMPLE_SIZE;
   const normalizedHistogram = Array.from(histogram).map((val) => val / totalPixels);
 
-  // 8x8 结构特征（局部均值 + 边缘能量）
+  // 8x8 结构特征（零均值归一化，支持零均值归一化互相关 ZNCC）
   const structure = new Array<number>(STRUCTURE_GRID * STRUCTURE_GRID);
   const bucketSize = SAMPLE_SIZE / STRUCTURE_GRID;
+  let structSum = 0;
   for (let gridY = 0; gridY < STRUCTURE_GRID; gridY += 1) {
     for (let gridX = 0; gridX < STRUCTURE_GRID; gridX += 1) {
       let sum = 0;
@@ -382,11 +381,15 @@ function describeCrop(image: HTMLImageElement, crop: Crop, workspace?: Descripto
           count += 1;
         }
       }
-      structure[gridY * STRUCTURE_GRID + gridX] = sum / (count || 1);
+      const val = sum / (count || 1);
+      structure[gridY * STRUCTURE_GRID + gridX] = val;
+      structSum += val;
     }
   }
+  const structMean = structSum / (STRUCTURE_GRID * STRUCTURE_GRID);
+  for (let i = 0; i < structure.length; i += 1) structure[i] -= structMean;
 
-  // 4x4 HOG (8 方向梯度方向直方图，总共 128 维)
+  // 4x4 HOG (8 方向梯度方向直方图)
   const hog = new Float32Array(HOG_GRID * HOG_GRID * HOG_BINS);
   const hogCellSize = SAMPLE_SIZE / HOG_GRID;
   for (let y = 1; y < SAMPLE_SIZE - 1; y += 1) {
@@ -394,7 +397,7 @@ function describeCrop(image: HTMLImageElement, crop: Crop, workspace?: Descripto
       const gx = luminance[y * SAMPLE_SIZE + (x + 1)] - luminance[y * SAMPLE_SIZE + (x - 1)];
       const gy = luminance[(y + 1) * SAMPLE_SIZE + x] - luminance[(y - 1) * SAMPLE_SIZE + x];
       const magnitude = Math.hypot(gx, gy);
-      if (magnitude < 0.005) continue;
+      if (magnitude < 0.004) continue;
       let angle = Math.atan2(gy, gx);
       if (angle < 0) angle += Math.PI;
       const bin = Math.min(HOG_BINS - 1, Math.floor((angle / Math.PI) * HOG_BINS));
@@ -435,7 +438,7 @@ export async function createVisualDescriptors(source: string, density: IndexDens
 }
 
 /**
- * 寻找元素主体区域，避免过度裁切导致丢失关键轮廓
+ * 寻找元素主体区域，保留完整边界
  */
 function findContentCrop(image: HTMLImageElement): Crop {
   const sourceWidth = image.naturalWidth || image.width;
@@ -464,7 +467,7 @@ function findContentCrop(image: HTMLImageElement): Crop {
     pixels[offset + 2] - background[2],
   )));
 
-  // 四角颜色不一致说明是真实照片或复杂背景，不强行裁切
+  // 四角颜色不一致说明是真实照片，不强行裁切
   if (cornerSpread > 28) return BASE_CROPS[0];
 
   let minX = canvas.width;
@@ -482,7 +485,7 @@ function findContentCrop(image: HTMLImageElement): Crop {
         pixels[offset + 1] - background[1],
         pixels[offset + 2] - background[2],
       );
-      if (alpha > 20 && distance > 28) {
+      if (alpha > 20 && distance > 24) {
         foregroundCount += 1;
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
@@ -492,11 +495,10 @@ function findContentCrop(image: HTMLImageElement): Crop {
     }
   }
 
-  if (foregroundCount < canvas.width * canvas.height * 0.01 || maxX <= minX || maxY <= minY) return BASE_CROPS[0];
+  if (foregroundCount < canvas.width * canvas.height * 0.005 || maxX <= minX || maxY <= minY) return BASE_CROPS[0];
 
-  // 适度保留外边缘（10% 留白），避免切断笔画或阴影
-  const paddingX = Math.max(2, Math.round((maxX - minX + 1) * 0.10));
-  const paddingY = Math.max(2, Math.round((maxY - minY + 1) * 0.10));
+  const paddingX = Math.max(2, Math.round((maxX - minX + 1) * 0.08));
+  const paddingY = Math.max(2, Math.round((maxY - minY + 1) * 0.08));
   minX = Math.max(0, minX - paddingX);
   minY = Math.max(0, minY - paddingY);
   maxX = Math.min(canvas.width - 1, maxX + paddingX);
@@ -526,7 +528,7 @@ export async function createVisualContainmentQuery(source: string): Promise<Visu
 }
 
 /**
- * 密集多尺度与多长宽比滑动窗口生成
+ * 密集多尺度与多长宽比滑动窗口生成（专为多 Logo、局部图标与元素检索深度优化）
  */
 function createContainmentCrops(image: HTMLImageElement, queryAspectRatio: number): Crop[] {
   const sourceWidth = image.naturalWidth || image.width;
@@ -534,19 +536,22 @@ function createContainmentCrops(image: HTMLImageElement, queryAspectRatio: numbe
   const imageAspectRatio = sourceWidth / Math.max(1, sourceHeight);
   const crops: Crop[] = [BASE_CROPS[0], BASE_CROPS[1]];
 
-  // 针对长宽比增加扰动，容忍用户裁剪留白偏差
-  const aspectMultipliers = [0.82, 1.0, 1.22];
-  const areaFractions = [0.003, 0.008, 0.018, 0.038, 0.075, 0.14, 0.26, 0.48, 0.76, 1.0];
+  // 针对长宽比增加扰动，覆盖不同留白与排版
+  const aspectMultipliers = [0.72, 0.88, 1.0, 1.15, 1.40];
+  // 密集面积阶梯覆盖小 Logo (0.002~0.04) 到中大元素 (0.08~0.85)
+  const areaFractions = [0.002, 0.005, 0.010, 0.020, 0.040, 0.080, 0.16, 0.30, 0.55, 0.85];
 
   for (const multiplier of aspectMultipliers) {
     const targetAspect = queryAspectRatio * multiplier;
     for (const area of areaFractions) {
       const width = Math.sqrt((area * targetAspect) / imageAspectRatio);
       const height = Math.sqrt((area * imageAspectRatio) / targetAspect);
-      if (width > 1.001 || height > 1.001 || width < 0.025 || height < 0.025) continue;
+      if (width > 1.001 || height > 1.001 || width < 0.02 || height < 0.02) continue;
 
-      const columns = Math.min(20, Math.max(1, Math.ceil((1 - width) / Math.max(0.02, width * 0.45)) + 1));
-      const rows = Math.min(20, Math.max(1, Math.ceil((1 - height) / Math.max(0.02, height * 0.45)) + 1));
+      // 小尺度区域使用更密集步长 (32% 步长)，确保不错过任何小 Logo
+      const stepFactor = area <= 0.06 ? 0.32 : 0.42;
+      const columns = Math.min(26, Math.max(1, Math.ceil((1 - width) / Math.max(0.012, width * stepFactor)) + 1));
+      const rows = Math.min(26, Math.max(1, Math.ceil((1 - height) / Math.max(0.012, height * stepFactor)) + 1));
 
       for (let row = 0; row < rows; row += 1) {
         const y = rows === 1 ? (1 - height) / 2 : (row / (rows - 1)) * (1 - height);
@@ -582,44 +587,44 @@ function matchBinaryFeatures(query: LocalFeatureModel, candidate: LocalFeatureMo
   const matches: FeatureMatch[] = [];
 
   for (const queryFeature of query.features) {
-    let best: BinaryFeature | undefined;
-    let bestDistance = Infinity;
-    let secondDistance = Infinity;
+    let best1: BinaryFeature | undefined;
+    let dist1 = Infinity;
+    let dist2 = Infinity;
 
     for (const candidateFeature of candidate.features) {
       const distance = hammingDistance(queryFeature.descriptor, candidateFeature.descriptor);
-      if (distance < bestDistance) {
-        if (!best || Math.hypot(candidateFeature.x - best.x, candidateFeature.y - best.y) > 6) {
-          secondDistance = bestDistance;
-        }
-        bestDistance = distance;
-        best = candidateFeature;
-      } else if ((!best || Math.hypot(candidateFeature.x - best.x, candidateFeature.y - best.y) > 6) && distance < secondDistance) {
-        secondDistance = distance;
+      if (distance < dist1) {
+        dist2 = dist1;
+        dist1 = distance;
+        best1 = candidateFeature;
+      } else if (distance < dist2) {
+        dist2 = distance;
       }
     }
 
-    // 采用宽松但稳健的 Lowe Ratio 检验与绝对汉明距离门限
-    if (best && bestDistance <= 92 && (bestDistance < secondDistance * 0.88 || bestDistance <= 52)) {
-      matches.push({ query: queryFeature, candidate: best, distance: bestDistance });
+    // 容忍多 Logo 场景下的共存匹配
+    if (best1 && dist1 <= 88) {
+      if (dist1 <= 68 || dist1 < dist2 * 0.94) {
+        matches.push({ query: queryFeature, candidate: best1, distance: dist1 });
+      }
     }
   }
-  return matches.sort((left, right) => left.distance - right.distance).slice(0, 120);
+  return matches.sort((left, right) => left.distance - right.distance).slice(0, 160);
 }
 
 /**
- * 局部特征几何一致性评分（RANSAC）
+ * 局部特征几何一致性评分（RANSAC 仿射变换估计）
  */
 function featureContainmentScore(query: LocalFeatureModel | undefined, candidate: LocalFeatureModel | undefined): number {
-  if (!query || !candidate || query.features.length < 6 || candidate.features.length < 6) return 0;
+  if (!query || !candidate || query.features.length < 4 || candidate.features.length < 4) return 0;
   const matches = matchBinaryFeatures(query, candidate);
   if (matches.length < 3) return 0;
 
   const diagonal = Math.hypot(candidate.width, candidate.height);
-  const tolerance = Math.max(5, Math.min(22, diagonal * 0.016));
+  const tolerance = Math.max(6, Math.min(26, diagonal * 0.018));
   let bestInliers: FeatureMatch[] = [];
 
-  const maxSamples = Math.min(matches.length * 4, 180);
+  const maxSamples = Math.min(matches.length * 5, 220);
   for (let sample = 0; sample < maxSamples; sample += 1) {
     const first = Math.floor(Math.random() * matches.length);
     let second = Math.floor(Math.random() * matches.length);
@@ -635,12 +640,12 @@ function featureContainmentScore(query: LocalFeatureModel | undefined, candidate
     const cx = c2.x - c1.x;
     const cy = c2.y - c1.y;
     const denominator = qx * qx + qy * qy;
-    if (denominator < 64 || cx * cx + cy * cy < 16) continue;
+    if (denominator < 48 || cx * cx + cy * cy < 12) continue;
 
     const a = (cx * qx + cy * qy) / denominator;
     const b = (cy * qx - cx * qy) / denominator;
     const scale = Math.hypot(a, b);
-    if (scale < 0.02 || scale > 20) continue;
+    if (scale < 0.015 || scale > 25) continue;
 
     const translateX = c1.x - (a * q1.x - b * q1.y);
     const translateY = c1.y - (b * q1.x + a * q1.y);
@@ -653,7 +658,7 @@ function featureContainmentScore(query: LocalFeatureModel | undefined, candidate
 
     if (inliers.length > bestInliers.length) {
       bestInliers = inliers;
-      if (bestInliers.length >= 24) break;
+      if (bestInliers.length >= 20) break;
     }
   }
 
@@ -667,13 +672,11 @@ function featureContainmentScore(query: LocalFeatureModel | undefined, candidate
   const inlierRatio = bestInliers.length / matches.length;
   const descriptorQuality = 1 - bestInliers.reduce((sum, match) => sum + match.distance, 0) / bestInliers.length / BRIEF_BITS;
 
-  // 平滑连续的几何置信度评分函数
-  const baseScore = reliableInliers >= 8 ? 0.78 : reliableInliers >= 5 ? 0.68 : 0.58;
-  const inlierBonus = Math.min(0.20, (reliableInliers - 3) * 0.025);
-  const qualityBonus = Math.max(0, descriptorQuality - 0.65) * 0.25;
-  const ratioBonus = inlierRatio * 0.08;
+  const baseScore = reliableInliers >= 6 ? 0.82 : reliableInliers >= 4 ? 0.74 : 0.65;
+  const inlierBonus = Math.min(0.18, (reliableInliers - 3) * 0.03);
+  const qualityBonus = Math.max(0, descriptorQuality - 0.60) * 0.20;
 
-  return Math.min(0.99, baseScore + inlierBonus + qualityBonus + ratioBonus);
+  return Math.min(0.99, baseScore + inlierBonus + qualityBonus + inlierRatio * 0.05);
 }
 
 function cosine(left: number[], right: number[], start: number, length: number): number {
@@ -699,28 +702,40 @@ export function visualSimilarity(left?: VisualDescriptor, right?: VisualDescript
   const hogStart = histogramStart + histogramLength;
   const hogLength = HOG_GRID * HOG_GRID * HOG_BINS;
 
-  // 1. 空间色彩相似度（非线性加权，严格惩罚颜色与空间布局差异）
+  // 1. 空间色彩相似度
   let colorDistance = 0;
   for (let index = 0; index < colorLength; index += 1) colorDistance += (left[index] - right[index]) ** 2;
   const normalizedColorDist = Math.sqrt(colorDistance / colorLength);
-  const colorScore = Math.max(0, 1 - normalizedColorDist * 1.8) ** 2;
+  const colorScore = Math.max(0, 1 - normalizedColorDist * 1.5);
 
-  // 2. 结构亮度相似度 (NCC, 过滤弱相关与负相关基底)
+  // 2. 结构亮度相似度 (NCC 归一化互相关)
   const rawStructureCos = cosine(left, right, colorLength, structureLength);
-  const structureScore = Math.max(0, (rawStructureCos - 0.25) / 0.75) ** 2;
+  const structureScore = Math.max(0, rawStructureCos);
 
-  // 3. 全局色彩分布直方图交集 (减去随机重合基底)
+  // 3. 全局色彩分布直方图交集
   let histogramOverlap = 0;
   for (let index = histogramStart; index < histogramStart + histogramLength; index += 1) {
     histogramOverlap += Math.min(left[index], right[index]);
   }
-  const histogramScore = Math.max(0, (histogramOverlap - 0.38) / 0.62) ** 2;
+  const histogramScore = Math.max(0, (histogramOverlap - 0.25) / 0.75);
 
   // 4. HOG 梯度方向轮廓相似度
   const rawHogCos = cosine(left, right, hogStart, hogLength);
-  const hogScore = Math.max(0, (rawHogCos - 0.20) / 0.80) ** 2;
+  const hogScore = Math.max(0, rawHogCos);
 
-  return colorScore * 0.25 + structureScore * 0.25 + histogramScore * 0.20 + hogScore * 0.30;
+  // 形态特征 (结构+HOG轮廓) vs 色彩特征
+  const shapeMatch = structureScore * 0.50 + hogScore * 0.50;
+  const colorMatch = colorScore * 0.50 + histogramScore * 0.50;
+
+  // 当结构和轮廓显著吻合时（如特定 Logo 图案、图标轮廓、文字），赋予高置信度
+  if (shapeMatch >= 0.65) {
+    return Math.min(0.98, shapeMatch * 0.65 + colorMatch * 0.35 + 0.08);
+  }
+  if (shapeMatch >= 0.48) {
+    return Math.min(0.85, shapeMatch * 0.60 + colorMatch * 0.40);
+  }
+
+  return Math.min(0.48, shapeMatch * 0.50 + colorMatch * 0.50);
 }
 
 export function bestVisualSimilarity(query: VisualDescriptor | null, candidates?: VisualDescriptor[]): number {
@@ -749,11 +764,6 @@ export async function containedVisualSimilarity(
         }
       }
 
-      // 人脸欧氏距离判断：
-      // <= 0.44: 极高置信度同一人 (0.90 ~ 0.99)
-      // <= 0.54: 确认为同一人 (0.78 ~ 0.89)
-      // <= 0.58: 临界可能同一人 (0.65)
-      // > 0.58: 明确为不同人物！硬拒绝，直接返回 0.02
       if (minDistance <= 0.44) {
         return Math.min(0.99, 0.90 + (0.44 - minDistance) * 0.20);
       }
@@ -763,6 +773,7 @@ export async function containedVisualSimilarity(
       if (minDistance <= 0.58) {
         return 0.65;
       }
+      // 明确为不同人物：硬拒绝
       return 0.02;
     }
   }
@@ -789,10 +800,10 @@ export async function containedVisualSimilarity(
       const crops = createContainmentCrops(image, query.aspectRatio);
       const strongest: Array<{ score: number; crop: Crop }> = [];
       const remember = (score: number, crop: Crop) => {
-        if (strongest.length < 8 || score > strongest[strongest.length - 1].score) {
+        if (strongest.length < 10 || score > strongest[strongest.length - 1].score) {
           strongest.push({ score, crop });
           strongest.sort((left, right) => right.score - left.score);
-          strongest.length = Math.min(8, strongest.length);
+          strongest.length = Math.min(10, strongest.length);
         }
       };
 
@@ -807,13 +818,13 @@ export async function containedVisualSimilarity(
         }
       }
 
-      // 4. 在最强响应区域周围做位置与尺寸微调 (Fine Sub-pixel Refinement)
+      // 4. 在最强响应区域周围做精细化位置与尺度微调
       for (const { crop } of [...strongest]) {
         const centerX = crop.x + crop.width / 2;
         const centerY = crop.y + crop.height / 2;
-        for (const scale of [0.88, 1.0, 1.14]) {
-          for (const offsetY of [-0.2, 0, 0.2]) {
-            for (const offsetX of [-0.2, 0, 0.2]) {
+        for (const scale of [0.88, 1.0, 1.15]) {
+          for (const offsetY of [-0.15, 0, 0.15]) {
+            for (const offsetX of [-0.15, 0, 0.15]) {
               const refined = clampCropAroundCenter(
                 centerX + crop.width * offsetX,
                 centerY + crop.height * offsetY,
