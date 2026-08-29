@@ -299,6 +299,8 @@ button:not(:disabled), select:not(:disabled), input[type="checkbox"]:not(:disabl
 .search-results-header h2 { overflow: hidden; margin: 2px 0 0; font-size: clamp(20px,2.2vw,31px); font-weight: 750; letter-spacing: -.045em; text-overflow: ellipsis; white-space: nowrap; }
 .search-results-header p { margin: 4px 0 0; color: #7a847e; font-size: 11px; }
 .search-results-header p strong { color: #16231f; }
+.search-results-header .search-results-intent { color: #627069; }
+.search-results-header .search-results-intent strong { display: inline-block; margin-left: 4px; border-radius: 999px; background: #e3efea; padding: 2px 8px; color: #1f6f5f; font-size: 10px; }
 .search-results-mode { display: flex; align-items: center; gap: 8px; border: 1px solid #ded9ce; border-radius: 12px; background: #f2eee5; padding: 10px 12px; color: #637069; font-size: 10px; font-weight: 750; }
 .search-results-mode svg { width: 15px; height: 15px; color: #6d609f; }
 .search-results-close { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border: 1px solid #d9d4c8; border-radius: 12px; background: white; color: #68746f; transition: transform 160ms ease, border-color 160ms ease; }

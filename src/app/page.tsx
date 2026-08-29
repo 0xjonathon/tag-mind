@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DropZone } from '@/components/DropZone';
 import { FileDetailModal } from '@/components/FileDetailModal';
 import { FileGrid } from '@/components/FileGrid';
@@ -13,6 +13,7 @@ import { TagSidebar } from '@/components/TagSidebar';
 import { cosineSimilarity, createQueryEmbedding, createVisualSearchQuery, processCreatorFiles } from '@/lib/aiService';
 import { fuzzyMatch, mediaSearchText } from '@/lib/fuzzySearch';
 import { clusterPeople } from '@/lib/faceRecognition';
+import { localSearchIntent } from '@/lib/searchIntent';
 import { AISettings, CreatorCategory, MediaItem, MediaType } from '@/types/file';
 
 const SETTINGS_KEY = 'tagmind_ai_settings_v2';
@@ -53,8 +54,11 @@ export default function Home() {
   const [settings, setSettings] = useState<AISettings>(DEFAULT_SETTINGS);
   const [searchQuery, setSearchQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
+  const [effectiveQuery, setEffectiveQuery] = useState('');
+  const [searchIntentSource, setSearchIntentSource] = useState<'llm' | 'local'>('local');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isVoiceOrganizing, setIsVoiceOrganizing] = useState(false);
+  const [isSearchOrganizing, setIsSearchOrganizing] = useState(false);
   const [isImageAnalyzing, setIsImageAnalyzing] = useState(false);
   const [imageSearchPreview, setImageSearchPreview] = useState('');
   const [submittedSearchMode, setSubmittedSearchMode] = useState<'text' | 'visual'>('text');
@@ -71,14 +75,18 @@ export default function Home() {
   const [progressText, setProgressText] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShotListOpen, setIsShotListOpen] = useState(false);
+  const searchRequestRef = useRef(0);
+  const searchIntentAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSettings(readSavedSettings()), 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => () => searchIntentAbortRef.current?.abort(), []);
+
   useEffect(() => {
-    const query = submittedQuery.trim();
+    const query = effectiveQuery.trim();
     const hasIndexedVectors = files.some((file) => file.embedding?.length);
     if (!query || !settings.enableSemanticSearch || !hasIndexedVectors) {
       const resetTimer = window.setTimeout(() => {
@@ -112,7 +120,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [files, submittedQuery, settings]);
+  }, [effectiveQuery, files, settings]);
 
   const handleSaveSettings = (next: AISettings) => {
     setSettings(next);
@@ -152,14 +160,62 @@ export default function Home() {
     setShowOnlyDuplicates(false);
   };
 
-  const submitSearch = (query: string) => {
+  const closeSearchResults = () => {
+    searchRequestRef.current += 1;
+    searchIntentAbortRef.current?.abort();
+    searchIntentAbortRef.current = null;
+    setIsSearchOrganizing(false);
+    setIsSearchOpen(false);
+  };
+
+  const submitSearch = async (query: string) => {
     const clean = query.trim();
     if (!clean) return;
+    searchIntentAbortRef.current?.abort();
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
+    const localIntent = localSearchIntent(clean);
+    const isVisualSearch = Boolean(imageSearchPreview);
+
     setSearchQuery(clean);
     setSubmittedQuery(clean);
-    setSubmittedSearchMode(imageSearchPreview ? 'visual' : 'text');
+    setEffectiveQuery(localIntent.searchQuery);
+    setSearchIntentSource(isVisualSearch ? 'llm' : 'local');
+    setSubmittedSearchMode(isVisualSearch ? 'visual' : 'text');
     resetFilters();
     setIsSearchOpen(true);
+
+    if (isVisualSearch) return;
+
+    const controller = new AbortController();
+    searchIntentAbortRef.current = controller;
+    setIsSearchOrganizing(true);
+    try {
+      const response = await fetch('/api/organize-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: clean,
+          apiKey: settings.apiKey,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+          enableCloudAI: settings.enableCloudAI && settings.enableTextOrganization,
+        }),
+        signal: controller.signal,
+      });
+      const payload = (await response.json()) as { success?: boolean; query?: string; keywords?: string[]; source?: 'llm' | 'local' };
+      if (searchRequestRef.current !== requestId) return;
+      const interpreted = payload.keywords?.length ? payload.keywords.join(' ') : payload.query?.trim() || localIntent.searchQuery;
+      setEffectiveQuery(interpreted);
+      setSearchIntentSource(payload.source === 'llm' ? 'llm' : 'local');
+    } catch {
+      // 已显示本地提炼结果，不让模型故障阻断搜索。
+    } finally {
+      if (searchRequestRef.current === requestId) {
+        searchIntentAbortRef.current = null;
+        setIsSearchOrganizing(false);
+      }
+    }
   };
 
   const handleVoiceQuery = async (transcript: string) => {
@@ -176,7 +232,7 @@ export default function Home() {
           enableCloudAI: settings.enableCloudAI && settings.enableTextOrganization,
         }),
       });
-      const payload = (await response.json()) as { success?: boolean; query?: string };
+      const payload = (await response.json()) as { success?: boolean; query?: string; keywords?: string[] };
       setSearchQuery(payload.query?.trim() || transcript);
     } catch {
       setSearchQuery(transcript);
@@ -197,7 +253,7 @@ export default function Home() {
   };
 
   const filteredFiles = useMemo(() => {
-    const query = submittedQuery.trim().toLowerCase();
+    const query = effectiveQuery.trim().toLowerCase();
     return files
       .filter((file) => {
         if (submittedSearchMode === 'visual' && !['image', 'video'].includes(file.mediaType)) return false;
@@ -217,7 +273,7 @@ export default function Home() {
       .sort((left, right) => (semanticScores[right.id] || 0) - (semanticScores[left.id] || 0));
   }, [
     files,
-    submittedQuery,
+    effectiveQuery,
     selectedCategory,
     selectedExtension,
     selectedMediaType,
@@ -257,9 +313,15 @@ export default function Home() {
         onOpenExport={() => setIsShotListOpen(true)}
         onClearFiles={() => {
           if (window.confirm('确定清空当前索引吗？原始素材不会被删除。')) {
+            searchRequestRef.current += 1;
+            searchIntentAbortRef.current?.abort();
+            searchIntentAbortRef.current = null;
+            setIsSearchOrganizing(false);
             setFiles([]);
             setSearchQuery('');
             setSubmittedQuery('');
+            setEffectiveQuery('');
+            setSearchIntentSource('local');
             setImageSearchPreview('');
             setSubmittedSearchMode('text');
             setIsSearchOpen(false);
@@ -301,6 +363,7 @@ export default function Home() {
               imageSearchPreview={imageSearchPreview}
               onClearImageQuery={() => setImageSearchPreview('')}
               isVoiceOrganizing={isVoiceOrganizing}
+              isSearchOrganizing={isSearchOrganizing}
               isImageAnalyzing={isImageAnalyzing}
             />
           )}
@@ -336,10 +399,13 @@ export default function Home() {
       {isSearchOpen && (
         <SearchResultsModal
           query={submittedQuery}
+          interpretedQuery={effectiveQuery}
+          interpretationSource={searchIntentSource}
+          isInterpreting={isSearchOrganizing}
           resultCount={filteredFiles.length}
           totalCount={files.length}
           semanticStatus={semanticStatus}
-          onClose={() => setIsSearchOpen(false)}
+          onClose={closeSearchResults}
         >
           <TagSidebar
             variant="toolbar"
@@ -361,7 +427,7 @@ export default function Home() {
             onResetFilters={resetFilters}
           />
           <div className="mt-6">
-            <FileGrid files={filteredFiles} searchQuery={submittedQuery} onSelectFile={setSelectedFile} onDeleteFile={(id) => setFiles((current) => current.filter((file) => file.id !== id))} />
+            <FileGrid files={filteredFiles} searchQuery={effectiveQuery} onSelectFile={setSelectedFile} onDeleteFile={(id) => setFiles((current) => current.filter((file) => file.id !== id))} />
           </div>
         </SearchResultsModal>
       )}
@@ -370,7 +436,7 @@ export default function Home() {
         <FileDetailModal
           key={selectedFile.id}
           file={selectedFile}
-          searchQuery={isSearchOpen ? submittedQuery : ''}
+          searchQuery={isSearchOpen ? effectiveQuery : ''}
           onClose={() => setSelectedFile(null)}
           onUpdateFile={(updated) => setFiles((current) => current.map((file) => file.id === updated.id ? updated : file))}
         />

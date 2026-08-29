@@ -30,6 +30,7 @@ interface SearchBarProps {
   imageSearchPreview?: string;
   onClearImageQuery: () => void;
   isVoiceOrganizing?: boolean;
+  isSearchOrganizing?: boolean;
   isImageAnalyzing?: boolean;
   disabled?: boolean;
 }
@@ -43,6 +44,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   imageSearchPreview,
   onClearImageQuery,
   isVoiceOrganizing = false,
+  isSearchOrganizing = false,
   isImageAnalyzing = false,
   disabled = false,
 }) => {
@@ -103,8 +105,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     }
   };
 
-  const busy = isVoiceOrganizing || isImageAnalyzing;
-
   return (
     <div className="hero-search-wrap">
       <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={selectImage} />
@@ -123,9 +123,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           onKeyDown={(event) => { if (event.key === 'Enter') submit(); }}
           placeholder="输入你能想到的任意信息"
           aria-label="输入你能想到的任意信息"
-          disabled={disabled || busy}
+          disabled={disabled}
         />
-        {query && !busy && (
+        {query && (
           <button type="button" onClick={() => onQueryChange('')} className="hero-search-clear" aria-label="清空搜索">
             <X />
           </button>
@@ -134,7 +134,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           <button
             type="button"
             onClick={() => imageInputRef.current?.click()}
-            disabled={disabled || busy}
+            disabled={disabled || isImageAnalyzing}
             className="hero-image-search"
             aria-label="上传图片查找相似内容"
             title="以图找内容"
@@ -145,15 +145,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         <button
           type="button"
           onClick={toggleVoice}
-          disabled={disabled || busy}
+          disabled={disabled || isVoiceOrganizing || isImageAnalyzing}
           className={`hero-voice ${isListening ? 'is-listening' : ''}`}
           aria-label={isListening ? '停止语音输入' : '语音输入'}
         >
           {isVoiceOrganizing ? <LoaderCircle className="animate-spin" /> : isListening ? <MicOff /> : <Mic />}
         </button>
-        <button type="button" onClick={submit} disabled={!query.trim() || disabled || busy} className="hero-search-submit">
-          <span>{busy ? (isImageAnalyzing ? '理解图片' : '正在整理') : '搜索'}</span>
-          {busy ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
+        <button type="button" onClick={submit} disabled={!query.trim() || disabled || isVoiceOrganizing || isImageAnalyzing} className="hero-search-submit">
+          <span>{isImageAnalyzing ? '理解图片' : isVoiceOrganizing ? '正在整理' : '搜索'}</span>
+          {isSearchOrganizing || isVoiceOrganizing || isImageAnalyzing ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
         </button>
       </div>
       {(voiceError || isListening || isImageAnalyzing) && <p className={`hero-search-note ${voiceError ? 'is-error' : ''}`}>{voiceError || (isImageAnalyzing ? '正在提取图片中的人物、场景、动作与文字…' : '正在倾听，说出你想找的内容…')}</p>}

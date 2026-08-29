@@ -83,7 +83,8 @@ export function matchedTerms(text: string, query: string): string[] {
   const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) return [];
   const terms = new Set<string>();
-  const exactIndex = text.toLocaleLowerCase().indexOf(normalizedQuery);
+  const lowerText = text.toLocaleLowerCase();
+  const exactIndex = lowerText.indexOf(normalizedQuery);
   if (exactIndex >= 0) terms.add(text.slice(exactIndex, exactIndex + normalizedQuery.length));
 
   const queryTokens = normalizedQuery.match(LATIN_TOKEN) || [];
@@ -94,7 +95,11 @@ export function matchedTerms(text: string, query: string): string[] {
     });
   });
 
-  const nonLatin = normalizedQuery.replace(LATIN_TOKEN, '').trim();
-  if (nonLatin) terms.add(nonLatin);
+  normalizedQuery.split(/\s+/).forEach((unit) => {
+    const nonLatin = unit.replace(LATIN_TOKEN, '').trim();
+    if (!nonLatin) return;
+    const index = lowerText.indexOf(nonLatin);
+    if (index >= 0) terms.add(text.slice(index, index + nonLatin.length));
+  });
   return [...terms].sort((left, right) => right.length - left.length);
 }

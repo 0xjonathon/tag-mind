@@ -41,7 +41,7 @@ export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelect
   if (files.length === 0) return (
     <div className="app-panel flex min-h-56 flex-col items-center justify-center rounded-[22px] p-8 text-center">
       <div className="mb-4 grid h-14 w-14 place-items-center rounded-[18px] border border-[#16231f] bg-[#ddf36a] shadow-[6px_6px_0_#16231f]"><ScanSearch className="h-5 w-5" /></div>
-      <p className="text-[15px] font-bold">没有找到匹配素材</p>
+      <p className="text-[15px] font-bold">没有找到匹配文件</p>
       <p className="mt-2 text-[12px] text-[#748079]">换个说法，或清除上方筛选条件</p>
     </div>
   );
