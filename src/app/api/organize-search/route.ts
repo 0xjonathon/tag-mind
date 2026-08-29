@@ -5,7 +5,7 @@ import {
   openAIEndpointCandidates,
   readUpstreamError,
 } from '@/lib/aiGateway';
-import { localSearchIntent, normalizeIntentKeywords, shouldInterpretSearch } from '@/lib/searchIntent';
+import { localSearchIntent, normalizeIntentKeywords } from '@/lib/searchIntent';
 
 interface OrganizeSearchRequest {
   transcript?: string;
@@ -25,7 +25,8 @@ export async function POST(request: NextRequest) {
     }
 
     const localIntent = localSearchIntent(text);
-    if (!shouldInterpretSearch(text) || !body.enableCloudAI || !body.model?.trim() || !body.baseUrl?.trim()) {
+    // 搜索结果先由前端的本地意图即时返回；只要模型可用，这里始终用 LLM 复核并优化。
+    if (!body.enableCloudAI || !body.model?.trim() || !body.baseUrl?.trim()) {
       return NextResponse.json({ success: true, query: localIntent.searchQuery, keywords: localIntent.keywords, source: 'local' });
     }
 
@@ -42,9 +43,10 @@ export async function POST(request: NextRequest) {
               role: 'system',
               content: `你是数字资产检索意图解析器。理解用户真正想找的内容，而不是机械复述整句话。
 提取可在文件名、台词、画面描述、人物标签、OCR、文档正文和时间轴中命中的关键词。
-保留明确的人物、对象、动作、场景、地点、台词原句、文档主题、时间和情绪；删除“帮我找一下”“我记得好像”等请求和犹豫用语。
-不得增加用户没有表达的信息。台词原句应尽量保持连续，不要拆成无意义的单字。
-仅输出严格 JSON：{"searchQuery":"空格分隔的精炼检索词","keywords":["关键词1","关键词2"]}。keywords 最多 10 个。`,
+即使用户只输入若干零散词，也要判断其核心检索意图。保留明确的文件类型、人物、对象、动作、场景、地点、台词、标题、错误代码、文档主题、时间和情绪。
+删除“帮我找一下”“我记得好像”“之类”“字样”等请求、犹豫或弱信息词。有意义的复合词和固定标题必须保持完整，例如“安全限制”，不要机械拆成“安全”“限制”。
+不得添加用户没有表达的信息；拼写纠正只能用于明显错别字或近似英文，并保留原词可检索含义。
+仅输出严格 JSON：{"searchQuery":"空格分隔的精炼检索词","keywords":["关键词1","关键词2"]}。keywords 保留 2 至 8 个，极短查询允许 1 个。`,
             },
             { role: 'user', content: text.slice(0, 1200) },
           ],

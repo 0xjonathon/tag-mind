@@ -15,6 +15,13 @@ interface FileDetailModalProps {
 }
 
 const CATEGORIES: CreatorCategory[] = ['A-Roll口播', 'B-Roll空镜', 'BGM配乐', '转场音效', '自媒体封面', '表情包梗图', '教程录屏', '文档资料', '其他文件'];
+const MEDIA_TYPE_LABEL: Record<MediaItem['mediaType'], string> = {
+  video: '视频',
+  audio: '音频',
+  image: '图片',
+  document: '文档',
+  other: '其他',
+};
 const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 const parseTime = (value?: string | number) => {
   if (value === undefined) return 0;
@@ -96,10 +103,10 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({ file, searchQu
             </div>
 
             <div className="mt-5 grid grid-cols-3 gap-2">
-              {[['类型', file.extension.toUpperCase()], ['规格', file.durationFormatted || file.resolution || '—'], ['大小', formatFileSize(file.size)]].map(([label, value]) => (
+              {[['类型', `${MEDIA_TYPE_LABEL[file.mediaType]} · ${file.extension.toUpperCase()}`], ['规格', file.durationFormatted || file.resolution || '—'], ['大小', formatFileSize(file.size)]].map(([label, value]) => (
                 <div key={label} className="rounded-xl border border-white/10 bg-white/5 p-3">
                   <div className="text-[10px] uppercase tracking-wider text-white/40">{label}</div>
-                  <div className="mt-1 truncate font-mono text-[12px] text-white/80">{value}</div>
+                  <div className="mt-1 truncate font-mono text-[12px] text-white/80"><HighlightedText text={value} query={searchQuery} /></div>
                 </div>
               ))}
             </div>

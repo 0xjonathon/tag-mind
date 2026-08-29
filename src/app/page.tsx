@@ -11,7 +11,7 @@ import { SettingsModal } from '@/components/SettingsModal';
 import { ShotListModal } from '@/components/ShotListModal';
 import { TagSidebar } from '@/components/TagSidebar';
 import { cosineSimilarity, createQueryEmbedding, createVisualSearchQuery, processCreatorFiles } from '@/lib/aiService';
-import { fuzzyMatch, mediaSearchText } from '@/lib/fuzzySearch';
+import { fuzzyMatch, fuzzyMatchScore, mediaSearchText } from '@/lib/fuzzySearch';
 import { clusterPeople } from '@/lib/faceRecognition';
 import { localSearchIntent } from '@/lib/searchIntent';
 import { AISettings, CreatorCategory, MediaItem, MediaType } from '@/types/file';
@@ -270,7 +270,10 @@ export default function Home() {
         const semanticMatch = (semanticScores[file.id] || 0) >= 0.32;
         return keywordMatch || semanticMatch;
       })
-      .sort((left, right) => (semanticScores[right.id] || 0) - (semanticScores[left.id] || 0));
+      .sort((left, right) => {
+        const keywordDifference = fuzzyMatchScore(mediaSearchText(right), query) - fuzzyMatchScore(mediaSearchText(left), query);
+        return keywordDifference || (semanticScores[right.id] || 0) - (semanticScores[left.id] || 0);
+      });
   }, [
     files,
     effectiveQuery,

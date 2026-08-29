@@ -72,7 +72,7 @@ export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelect
                 <div className={`relative flex aspect-[16/10] items-center justify-center overflow-hidden rounded-[14px] ${style.bg} text-white`}>
                   {file.thumbnailUrl ? <img src={file.thumbnailUrl} alt={file.originalName} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.035]" /> : file.mediaType === 'audio' ? <div className="flex h-16 items-center gap-1.5 text-[#ff8b6a]">{[22, 42, 62, 35, 72, 48, 25, 58, 39, 66, 31].map((height, index) => <span key={index} className="w-1 rounded-full bg-current" style={{ height }} />)}</div> : <MediaIcon type={file.mediaType} />}
                   <div className="absolute inset-x-0 top-0 flex items-center justify-between p-2.5">
-                    <span className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-extrabold text-[#16231f] ${style.badge}`}><MediaIcon type={file.mediaType} />{style.label}</span>
+                    <span className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-extrabold text-[#16231f] ${style.badge}`}><MediaIcon type={file.mediaType} /><HighlightedText text={style.label} query={searchQuery} /></span>
                     <span className="flex items-center gap-1 rounded-lg bg-[#16231f]/82 px-2 py-1.5 text-[9px] font-bold text-white backdrop-blur"><BrainCircuit className="h-3 w-3 text-[#ddf36a]" />{sourceLabel(file)}</span>
                   </div>
                   {file.mediaType === 'video' && <div className="absolute inset-0 grid place-items-center bg-[#16231f]/10 opacity-0 transition group-hover:opacity-100"><span className="grid h-11 w-11 place-items-center rounded-full bg-[#ddf36a] text-[#16231f] shadow-xl"><Play className="ml-0.5 h-4 w-4 fill-current" /></span></div>}
@@ -87,7 +87,7 @@ export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelect
 
                 <div className="px-1.5 pb-1 pt-3.5">
                   <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-extrabold" title={file.originalName}><HighlightedText text={file.originalName} query={searchQuery} /></h3><p className="mt-1.5 font-mono text-[9px] uppercase tracking-[.08em] text-[#8d9690]">{file.extension} · {formatFileSize(file.size)}</p></div>
+                    <div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-extrabold" title={file.originalName}><HighlightedText text={file.originalName} query={searchQuery} /></h3><p className="mt-1.5 font-mono text-[9px] uppercase tracking-[.08em] text-[#8d9690]"><HighlightedText text={file.extension} query={searchQuery} /> · {formatFileSize(file.size)}</p></div>
                     <button aria-label={`移除 ${file.originalName}`} onClick={(event) => { event.stopPropagation(); onDeleteFile(file.id); }} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#9ba39f] opacity-0 transition hover:bg-[#ffe6dd] hover:text-[#b95034] group-hover:opacity-100"><Trash2 className="h-4 w-4" /></button>
                   </div>
                   {file.analysisWarning && <div className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-[#eed7a6] bg-[#fff4d8] px-2.5 py-2 text-[11px] font-semibold text-[#825b19]"><AlertTriangle className="h-3.5 w-3.5" />查看处理说明</div>}

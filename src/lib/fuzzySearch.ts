@@ -1,6 +1,26 @@
-import { MediaItem } from '@/types/file';
+import type { MediaItem, MediaType } from '@/types/file';
 
 const LATIN_TOKEN = /[a-z0-9][a-z0-9._-]*/gi;
+
+const MEDIA_TYPE_TERMS: Record<MediaType, string[]> = {
+  video: ['视频', '影片', '录像', '短片', 'video', 'movie'],
+  audio: ['音频', '声音', '录音', '音乐', 'audio', 'sound'],
+  image: ['图片', '图像', '照片', '截图', 'image', 'photo', 'picture'],
+  document: ['文档', '资料', '正文', 'document'],
+  other: ['其他文件', '文件', 'other'],
+};
+
+const EXTENSION_TERMS: Record<string, string[]> = {
+  doc: ['word', '文档'],
+  docx: ['word', '文档'],
+  xls: ['excel', '表格', '电子表格'],
+  xlsx: ['excel', '表格', '电子表格'],
+  csv: ['csv', 'excel', '表格'],
+  ppt: ['ppt', 'powerpoint', '演示文稿', '幻灯片'],
+  pptx: ['ppt', 'powerpoint', '演示文稿', '幻灯片'],
+  pdf: ['pdf', '文档'],
+  txt: ['txt', 'text', '文本', '纯文本'],
+};
 
 export function normalizeSearchText(value: string): string {
   return value
@@ -12,8 +32,12 @@ export function normalizeSearchText(value: string): string {
 }
 
 export function mediaSearchText(file: MediaItem): string {
+  const extension = file.extension.trim().toLocaleLowerCase().replace(/^\./, '');
   return [
     file.originalName,
+    MEDIA_TYPE_TERMS[file.mediaType].join(' '),
+    extension,
+    EXTENSION_TERMS[extension]?.join(' '),
     file.category,
     file.extractedText,
     file.proofreadText,
@@ -57,25 +81,47 @@ function fuzzyTokenMatch(queryToken: string, candidate: string): boolean {
   return levenshteinWithin(queryToken, candidate, limit);
 }
 
-export function fuzzyMatch(text: string, query: string): boolean {
+function queryMatchStats(text: string, query: string) {
   const normalizedText = normalizeSearchText(text);
   const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) return true;
-  if (normalizedText.includes(normalizedQuery)) return true;
+  const queryUnits = [...new Set(normalizedQuery.split(/\s+/).filter(Boolean))];
+  if (!normalizedQuery || !queryUnits.length) {
+    return { normalizedText, normalizedQuery, queryUnits, matchedUnits: 0, score: 1 };
+  }
+  if (normalizedText.includes(normalizedQuery)) {
+    return { normalizedText, normalizedQuery, queryUnits, matchedUnits: queryUnits.length, score: 1 };
+  }
 
   const textTokens = normalizedText.match(LATIN_TOKEN) || [];
   const compactText = normalizedText.replace(/\s/g, '');
-  const queryUnits = normalizedQuery.split(/\s+/).filter(Boolean);
-  const matchedUnits = queryUnits.filter((unit) => {
+  const matched = queryUnits.filter((unit) => {
     const latin = unit.match(LATIN_TOKEN) || [];
     const nonLatin = unit.replace(LATIN_TOKEN, '');
     const latinMatches = latin.every((token) => textTokens.some((candidate) => fuzzyTokenMatch(token, candidate)));
     const nonLatinMatches = !nonLatin || compactText.includes(nonLatin);
     return latinMatches && nonLatinMatches;
-  }).length;
+  });
+  const matchedCharacters = matched.reduce((total, unit) => total + unit.length, 0);
+  const queryCharacters = queryUnits.reduce((total, unit) => total + unit.length, 0) || 1;
+  const coverage = matched.length / queryUnits.length;
+  const characterCoverage = matchedCharacters / queryCharacters;
+  const score = coverage * 0.78 + characterCoverage * 0.22;
+  return { normalizedText, normalizedQuery, queryUnits, matchedUnits: matched.length, score };
+}
 
-  // 多关键词（尤其是视觉模型提取的标签）允许部分命中；短查询仍保持严格匹配。
-  const requiredMatches = queryUnits.length <= 2 ? queryUnits.length : Math.ceil(queryUnits.length * 0.45);
+export function fuzzyMatchScore(text: string, query: string): number {
+  return queryMatchStats(text, query).score;
+}
+
+export function fuzzyMatch(text: string, query: string): boolean {
+  const { normalizedText, normalizedQuery, queryUnits, matchedUnits } = queryMatchStats(text, query);
+  if (!normalizedQuery) return true;
+  if (normalizedText.includes(normalizedQuery)) return true;
+
+  // 短查询保持严格；长句保证至少两个有效词命中，避免口语噪声拖垮召回。
+  const requiredMatches = queryUnits.length <= 2
+    ? queryUnits.length
+    : Math.max(2, Math.ceil(queryUnits.length * 0.4));
   return matchedUnits >= requiredMatches;
 }
 

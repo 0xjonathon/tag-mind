@@ -12,6 +12,7 @@ const REQUEST_PREFIXES = [
 ];
 
 const NOISE_PHRASES = [
+  '之类的字样', '类似的字样', '这类字样', '之类字样', '类似字样',
   '相关的文件', '相关文件', '这样的文件', '这种文件', '那个文件', '这个文件',
   '相关的内容', '相关内容', '这样的内容', '这种内容', '那个内容', '这个内容',
   '给我看一下', '让我看一下', '发给我', '找出来', '搜出来', '查出来',
@@ -24,9 +25,14 @@ const STOP_WORDS = new Set([
   '一个', '一些', '一下', '那个', '这个', '这些', '那些', '一张', '一段', '一份',
   '有个', '有一个', '里面', '其中', '关于', '相关', '大概', '应该', '可能', '好像',
   '提到', '说到', '讲到', '出现', '内容', '文件', '东西', '时候', '然后',
+  '之类', '类似', '这类', '字样',
   '我', '你', '他', '她', '它', '的', '了', '在', '是', '有', '和', '与', '或', '看', '说',
   '那', '这', '段', '张', '份',
 ]);
+
+function isWeakKeyword(value: string): boolean {
+  return STOP_WORDS.has(value) || /^(?:之类|类似|这类)(?:的)?(?:字样|文字|内容)?$/.test(value);
+}
 
 function segmentKeywords(value: string): string[] {
   try {
@@ -63,19 +69,12 @@ export function normalizeIntentKeywords(values: unknown, fallback: string): stri
   const keywords = raw
     .filter((value): value is string => typeof value === 'string')
     .map((value) => value.trim().replace(/^[-#\s]+|[-#\s]+$/g, ''))
-    .filter((value) => value.length >= 2 && value.length <= 40);
+    .filter((value) => value.length >= 2 && value.length <= 40)
+    .filter((value) => !isWeakKeyword(value));
 
   const unique = [...new Set(keywords)].slice(0, 10);
   if (unique.length) return unique;
   return localSearchIntent(fallback).keywords;
-}
-
-export function shouldInterpretSearch(value: string): boolean {
-  const text = value.trim();
-  if (!text) return false;
-  return text.length >= 16
-    || /[，。！？?,!]/.test(text)
-    || /帮我|给我|我想|我要|我需要|能不能|可以.*找|有没有|我记得|印象中|好像|查找|搜索|寻找|定位/.test(text);
 }
 
 export function localSearchIntent(value: string): SearchIntent {
@@ -84,6 +83,7 @@ export function localSearchIntent(value: string): SearchIntent {
   REQUEST_PREFIXES.forEach((pattern) => { cleaned = cleaned.replace(pattern, ''); });
   NOISE_PHRASES.forEach((phrase) => { cleaned = cleaned.replaceAll(phrase, ' '); });
   cleaned = cleaned
+    .replace(/(?:之类|类似|这类)(?:\s*的)?(?:\s*(?:字样|文字|内容))?/g, ' ')
     .replace(TRAILING_PARTICLES, '')
     .replace(/[“”"'‘’]/g, '')
     .replace(/[，。；！？?,;!]+/g, ' ')
@@ -91,7 +91,7 @@ export function localSearchIntent(value: string): SearchIntent {
     .trim();
 
   const searchQuery = cleaned || original;
-  const keywords = [...new Set(segmentKeywords(searchQuery))].slice(0, 10);
+  const keywords = [...new Set(segmentKeywords(searchQuery).filter((keyword) => !isWeakKeyword(keyword)))].slice(0, 10);
 
   return {
     searchQuery: keywords.length > 1 ? keywords.join(' ') : searchQuery,
