@@ -24,6 +24,8 @@ interface DropZoneProps {
 }
 
 interface LegacyEntry {
+  name?: string;
+  fullPath?: string;
   isFile: boolean;
   isDirectory: boolean;
   file?: (callback: (file: File) => void) => void;
@@ -31,7 +33,27 @@ interface LegacyEntry {
 }
 
 type ItemWithEntry = DataTransferItem & { webkitGetAsEntry?: () => LegacyEntry | null };
+type DesktopFileBridge = {
+  getPathForFile?: (file: File) => string | Promise<string>;
+};
+type DesktopWindow = Window & {
+  electronAPI?: DesktopFileBridge;
+  tagMindDesktop?: DesktopFileBridge;
+};
 
+async function attachDesktopPaths(files: File[]): Promise<File[]> {
+  const bridge = (window as DesktopWindow).tagMindDesktop || (window as DesktopWindow).electronAPI;
+  if (!bridge?.getPathForFile) return files;
+  await Promise.all(files.map(async (file) => {
+    try {
+      const absolutePath = (await bridge.getPathForFile?.(file))?.trim();
+      if (absolutePath) Object.defineProperty(file, 'tagMindAbsolutePath', { value: absolutePath, configurable: true });
+    } catch (error) {
+      console.warn('Desktop file path unavailable:', error);
+    }
+  }));
+  return files;
+}
 async function readDirectory(reader: ReturnType<NonNullable<LegacyEntry['createReader']>>): Promise<LegacyEntry[]> {
   const collected: LegacyEntry[] = [];
   while (true) {
@@ -44,7 +66,13 @@ async function readDirectory(reader: ReturnType<NonNullable<LegacyEntry['createR
 async function collectEntry(entry: LegacyEntry, output: File[]): Promise<void> {
   if (entry.isFile && entry.file) {
     await new Promise<void>((resolve) => entry.file?.((file) => {
-      if (!file.name.startsWith('.')) output.push(file);
+      if (!file.name.startsWith('.')) {
+        const relativePath = entry.fullPath?.replace(/^\/+/, '');
+        if (relativePath) {
+          Object.defineProperty(file, 'tagMindRelativePath', { value: relativePath, configurable: true });
+        }
+        output.push(file);
+      }
       resolve();
     }));
     return;
@@ -83,9 +111,9 @@ export function DropZone({ files, onFilesSelected, isProcessing, progressText, s
     return () => window.clearInterval(timer);
   }, [previewFiles.length]);
 
-  const submitInput = (input: HTMLInputElement) => {
+  const submitInput = async (input: HTMLInputElement) => {
     const selected = Array.from(input.files || []).filter((file) => !file.name.startsWith('.'));
-    if (selected.length) onFilesSelected(selected);
+    if (selected.length) onFilesSelected(await attachDesktopPaths(selected));
     input.value = '';
   };
 
@@ -102,7 +130,7 @@ export function DropZone({ files, onFilesSelected, isProcessing, progressText, s
         if (file) output.push(file);
       }
     }
-    if (output.length) onFilesSelected(output);
+    if (output.length) onFilesSelected(await attachDesktopPaths(output));
   };
 
   return (
@@ -112,8 +140,8 @@ export function DropZone({ files, onFilesSelected, isProcessing, progressText, s
       onDrop={handleDrop}
       className={`hero-shell ${isDragOver ? 'hero-shell-dragging' : ''}`}
     >
-      <input ref={folderInput} type="file" multiple className="hidden" onChange={(event) => submitInput(event.currentTarget)} {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)} />
-      <input ref={filesInput} type="file" multiple accept="video/*,audio/*,image/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.rtf,.pdf" className="hidden" onChange={(event) => submitInput(event.currentTarget)} />
+      <input ref={folderInput} type="file" multiple className="hidden" onChange={(event) => void submitInput(event.currentTarget)} {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)} />
+      <input ref={filesInput} type="file" multiple accept="video/*,audio/*,image/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.rtf,.pdf" className="hidden" onChange={(event) => void submitInput(event.currentTarget)} />
 
       <div className="hero-copy">
         <div className="hero-eyebrow"><span />SEARCH ACROSS EVERY FORMAT</div>
@@ -126,7 +154,7 @@ export function DropZone({ files, onFilesSelected, isProcessing, progressText, s
           </button>
           <button type="button" onClick={() => filesInput.current?.click()} className="hero-secondary"><FileUp />选择文件</button>
         </div>
-        <div className="hero-footnote"><span>视频 · 音频 · 图片 · 文档</span><span>索引文件，但不修改原文件信息。</span></div>
+        <div className="hero-footnote"><span>视频 · 音频 · 图片 · 文档</span><span>导入文件夹可保留完整目录层级。</span></div>
       </div>
 
       <div className="live-stage" aria-live="polite">

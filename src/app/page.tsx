@@ -14,6 +14,7 @@ import { cosineSimilarity, createQueryEmbedding, createVisualSearchQuery, proces
 import { fuzzyMatch, fuzzyMatchScore, mediaSearchText } from '@/lib/fuzzySearch';
 import { clusterPeople } from '@/lib/faceRecognition';
 import { localSearchIntent } from '@/lib/searchIntent';
+import { containedVisualSimilarity, VisualContainmentQuery } from '@/lib/visualSearch';
 import { AISettings, CreatorCategory, MediaItem, MediaType } from '@/types/file';
 
 const SETTINGS_KEY = 'tagmind_ai_settings_v2';
@@ -61,6 +62,9 @@ export default function Home() {
   const [isSearchOrganizing, setIsSearchOrganizing] = useState(false);
   const [isImageAnalyzing, setIsImageAnalyzing] = useState(false);
   const [imageSearchPreview, setImageSearchPreview] = useState('');
+  const [visualQuery, setVisualQuery] = useState<VisualContainmentQuery | null>(null);
+  const [visualScores, setVisualScores] = useState<Record<string, number>>({});
+  const [isVisualMatching, setIsVisualMatching] = useState(false);
   const [submittedSearchMode, setSubmittedSearchMode] = useState<'text' | 'visual'>('text');
   const [semanticScores, setSemanticScores] = useState<Record<string, number>>({});
   const [semanticStatus, setSemanticStatus] = useState<'idle' | 'searching' | 'ready' | 'fallback'>('idle');
@@ -77,6 +81,7 @@ export default function Home() {
   const [isShotListOpen, setIsShotListOpen] = useState(false);
   const searchRequestRef = useRef(0);
   const searchIntentAbortRef = useRef<AbortController | null>(null);
+  const visualMatchRequestRef = useRef(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSettings(readSavedSettings()), 0);
@@ -88,7 +93,7 @@ export default function Home() {
   useEffect(() => {
     const query = effectiveQuery.trim();
     const hasIndexedVectors = files.some((file) => file.embedding?.length);
-    if (!query || !settings.enableSemanticSearch || !hasIndexedVectors) {
+    if (submittedSearchMode === 'visual' || !query || !settings.enableSemanticSearch || !hasIndexedVectors) {
       const resetTimer = window.setTimeout(() => {
         setSemanticStatus(query ? 'fallback' : 'idle');
         setSemanticScores({});
@@ -120,7 +125,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [effectiveQuery, files, settings]);
+  }, [effectiveQuery, files, settings, submittedSearchMode]);
 
   const handleSaveSettings = (next: AISettings) => {
     setSettings(next);
@@ -174,8 +179,11 @@ export default function Home() {
     searchIntentAbortRef.current?.abort();
     const requestId = searchRequestRef.current + 1;
     searchRequestRef.current = requestId;
-    const localIntent = localSearchIntent(clean);
-    const isVisualSearch = Boolean(imageSearchPreview);
+    const isVisualSearch = Boolean(imageSearchPreview && visualQuery);
+    const isShortIdentifier = /^[a-z0-9]{1,4}$/i.test(clean);
+    const localIntent = isShortIdentifier
+      ? { searchQuery: clean, keywords: [clean] }
+      : localSearchIntent(clean);
 
     setSearchQuery(clean);
     setSubmittedQuery(clean);
@@ -185,7 +193,7 @@ export default function Home() {
     resetFilters();
     setIsSearchOpen(true);
 
-    if (isVisualSearch) return;
+    if (isVisualSearch || isShortIdentifier) return;
 
     const controller = new AbortController();
     searchIntentAbortRef.current = controller;
@@ -220,6 +228,8 @@ export default function Home() {
 
   const handleVoiceQuery = async (transcript: string) => {
     setIsVoiceOrganizing(true);
+    setImageSearchPreview('');
+    setVisualQuery(null);
     try {
       const response = await fetch('/api/organize-search', {
         method: 'POST',
@@ -244,19 +254,107 @@ export default function Home() {
   const handleImageQuery = async (file: File) => {
     setIsImageAnalyzing(true);
     try {
-      const result = await createVisualSearchQuery(file, settings);
+      const result = await createVisualSearchQuery(file);
+      const label = `以图搜索 · ${file.name}`;
+      searchRequestRef.current += 1;
+      searchIntentAbortRef.current?.abort();
+      searchIntentAbortRef.current = null;
       setImageSearchPreview(result.previewUrl);
-      setSearchQuery(result.query);
+      setVisualQuery(result.query);
+      setSearchQuery(label);
+      setSubmittedQuery(label);
+      setEffectiveQuery('');
+      setSearchIntentSource('local');
+      setSubmittedSearchMode('visual');
+      setSemanticScores({});
+      setSemanticStatus('idle');
+      setIsSearchOrganizing(false);
+      resetFilters();
+      setIsSearchOpen(true);
     } finally {
       setIsImageAnalyzing(false);
     }
   };
 
+  const handleQueryChange = (value: string) => {
+    if (imageSearchPreview) {
+      setImageSearchPreview('');
+      setVisualQuery(null);
+    }
+    setSearchQuery(value);
+  };
+
+  useEffect(() => {
+    const requestId = visualMatchRequestRef.current + 1;
+    visualMatchRequestRef.current = requestId;
+    if (!visualQuery) {
+      const timer = window.setTimeout(() => {
+        setVisualScores({});
+        setIsVisualMatching(false);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setVisualScores({});
+      setIsVisualMatching(true);
+      const scores: Record<string, number> = {};
+      try {
+        for (const file of files) {
+          if (cancelled || visualMatchRequestRef.current !== requestId) return;
+          if (!['image', 'video'].includes(file.mediaType)) continue;
+          const candidateSources = file.mediaType === 'video'
+            ? (file.timelineFrames || []).filter((frame) => frame.kind === 'video-frame').map((frame) => frame.thumbnailUrl || '').filter(Boolean)
+            : [file.thumbnailUrl || file.fileUrl || ''].filter(Boolean);
+          const indexedFeatureModels = file.mediaType === 'video'
+            ? (file.timelineFrames || [])
+              .filter((frame) => frame.kind === 'video-frame' && frame.thumbnailUrl)
+              .map((frame) => frame.visualFeatureModel)
+            : [file.visualFeatureModel];
+          scores[file.id] = await containedVisualSimilarity(
+            visualQuery,
+            candidateSources,
+            file.visualDescriptors,
+            indexedFeatureModels,
+          );
+          if (!cancelled && visualMatchRequestRef.current === requestId) setVisualScores({ ...scores });
+        }
+      } finally {
+        if (!cancelled && visualMatchRequestRef.current === requestId) setIsVisualMatching(false);
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [files, visualQuery]);
+
+  const visualCutoff = useMemo(() => {
+    const scores = Object.values(visualScores).filter((score) => typeof score === 'number' && score > 0);
+    if (scores.length === 0) return 0.45;
+    const best = Math.max(...scores);
+    if (best >= 0.85) return Math.max(0.60, best - 0.18);
+    if (best >= 0.72) return Math.max(0.50, best - 0.15);
+    if (best >= 0.58) return Math.max(0.40, best - 0.12);
+    if (best >= 0.45) return Math.max(0.32, best - 0.10);
+    return Math.max(0.25, best - 0.08);
+  }, [visualScores]);
+
+  const semanticCutoff = useMemo(() => {
+    const best = Math.max(0, ...Object.values(semanticScores));
+    const isShortQuery = /^[a-z0-9]{1,4}$/i.test(effectiveQuery.trim());
+    return Math.max(isShortQuery ? 0.58 : 0.5, best - (isShortQuery ? 0.05 : 0.07));
+  }, [effectiveQuery, semanticScores]);
+
   const filteredFiles = useMemo(() => {
     const query = effectiveQuery.trim().toLowerCase();
     return files
       .filter((file) => {
-        if (submittedSearchMode === 'visual' && !['image', 'video'].includes(file.mediaType)) return false;
+        if (submittedSearchMode === 'visual') {
+          if (!['image', 'video'].includes(file.mediaType)) return false;
+          if ((visualScores[file.id] || 0) < visualCutoff) return false;
+        }
         if (selectedMediaType && file.mediaType !== selectedMediaType) return false;
         if (selectedCategory && file.category !== selectedCategory) return false;
         if (selectedMood && file.dimensions.mood !== selectedMood) return false;
@@ -264,13 +362,15 @@ export default function Home() {
         if (selectedTag && !file.tags.includes(selectedTag)) return false;
         if (selectedPersonId && !file.faces?.some((face) => face.personId === selectedPersonId)) return false;
         if (showOnlyDuplicates && !file.isDuplicate) return false;
+        if (submittedSearchMode === 'visual') return true;
         if (!query) return true;
 
         const keywordMatch = fuzzyMatch(mediaSearchText(file), query);
-        const semanticMatch = (semanticScores[file.id] || 0) >= 0.32;
+        const semanticMatch = (semanticScores[file.id] || 0) >= semanticCutoff;
         return keywordMatch || semanticMatch;
       })
       .sort((left, right) => {
+        if (submittedSearchMode === 'visual') return (visualScores[right.id] || 0) - (visualScores[left.id] || 0);
         const keywordDifference = fuzzyMatchScore(mediaSearchText(right), query) - fuzzyMatchScore(mediaSearchText(left), query);
         return keywordDifference || (semanticScores[right.id] || 0) - (semanticScores[left.id] || 0);
       });
@@ -284,8 +384,11 @@ export default function Home() {
     selectedPersonId,
     selectedTag,
     semanticScores,
+    semanticCutoff,
     showOnlyDuplicates,
     submittedSearchMode,
+    visualCutoff,
+    visualScores,
   ]);
 
   const libraryFiles = useMemo(() => files.filter((file) => {
@@ -326,6 +429,7 @@ export default function Home() {
             setEffectiveQuery('');
             setSearchIntentSource('local');
             setImageSearchPreview('');
+            setVisualQuery(null);
             setSubmittedSearchMode('text');
             setIsSearchOpen(false);
             resetFilters();
@@ -359,12 +463,16 @@ export default function Home() {
           searchSlot={(
             <SearchBar
               query={searchQuery}
-              onQueryChange={setSearchQuery}
+              onQueryChange={handleQueryChange}
               onSubmit={submitSearch}
               onVoiceQuery={handleVoiceQuery}
               onImageQuery={handleImageQuery}
               imageSearchPreview={imageSearchPreview}
-              onClearImageQuery={() => setImageSearchPreview('')}
+              onClearImageQuery={() => {
+                setImageSearchPreview('');
+                setVisualQuery(null);
+                setSearchQuery('');
+              }}
               isVoiceOrganizing={isVoiceOrganizing}
               isSearchOrganizing={isSearchOrganizing}
               isImageAnalyzing={isImageAnalyzing}
@@ -404,10 +512,12 @@ export default function Home() {
           query={submittedQuery}
           interpretedQuery={effectiveQuery}
           interpretationSource={searchIntentSource}
-          isInterpreting={isSearchOrganizing}
+          isInterpreting={isSearchOrganizing || isVisualMatching}
           resultCount={filteredFiles.length}
           totalCount={files.length}
           semanticStatus={semanticStatus}
+          searchMode={submittedSearchMode}
+          imagePreview={submittedSearchMode === 'visual' ? imageSearchPreview : undefined}
           onClose={closeSearchResults}
         >
           <TagSidebar
@@ -430,7 +540,7 @@ export default function Home() {
             onResetFilters={resetFilters}
           />
           <div className="mt-6">
-            <FileGrid files={filteredFiles} searchQuery={effectiveQuery} onSelectFile={setSelectedFile} onDeleteFile={(id) => setFiles((current) => current.filter((file) => file.id !== id))} />
+            <FileGrid files={filteredFiles} searchQuery={effectiveQuery} visualQueryDescriptor={submittedSearchMode === 'visual' ? visualQuery?.descriptor : null} visualScores={submittedSearchMode === 'visual' ? visualScores : undefined} onSelectFile={setSelectedFile} onDeleteFile={(id) => setFiles((current) => current.filter((file) => file.id !== id))} />
           </div>
         </SearchResultsModal>
       )}

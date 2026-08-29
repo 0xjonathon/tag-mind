@@ -15,6 +15,13 @@ import {
 import { calculateFileHash } from './deduplication';
 import { extractDocumentText } from './documentParsers';
 import { detectFaces } from './faceRecognition';
+import {
+  createLocalFeatureIndex,
+  createVisualContainmentQuery,
+  createVisualDescriptors,
+  VisualContainmentQuery,
+  VisualDescriptor,
+} from './visualSearch';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -48,6 +55,7 @@ function transcriptForPrompt(segments: TranscriptSegment[]): string {
 function searchableText(item: MediaItem): string {
   return [
     item.originalName,
+    item.projectPath,
     item.category,
     item.timelineFrames?.map((frame) => `${frame.timeFormatted} ${frame.description || ''}`).join(' '),
     item.faces?.map((face) => face.personLabel).filter(Boolean).join(' '),
@@ -82,6 +90,8 @@ async function imageFileToPreview(file: File): Promise<string | undefined> {
     canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
     const context = canvas.getContext('2d');
     if (!context) return undefined;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/jpeg', 0.78);
   } finally {
@@ -272,6 +282,15 @@ export async function processCreatorFiles(
 
   for (let index = 0; index < validFiles.length; index += 1) {
     const file = validFiles[index];
+    const fileWithPath = file as File & { path?: string; tagMindAbsolutePath?: string; tagMindRelativePath?: string };
+    const absolutePath = (fileWithPath.tagMindAbsolutePath || fileWithPath.path)?.trim();
+    const relativePath = (fileWithPath.tagMindRelativePath || file.webkitRelativePath).replace(/^\/+/, '');
+    const projectPath = absolutePath || relativePath || file.name;
+    const pathKind: MediaItem['pathKind'] = absolutePath
+      ? 'absolute'
+      : relativePath
+        ? 'relative'
+        : 'filename';
     const extension = file.name.split('.').pop()?.toLowerCase() || '';
     const mediaType = getMediaTypeFromExtension(extension);
     onProgress?.(index + 1, total, `读取素材：${file.name}`);
@@ -296,6 +315,8 @@ export async function processCreatorFiles(
     let documentSummary: string | undefined;
     let documentWarning: string | undefined;
     let faceWarning: string | undefined;
+    let visualDescriptors: VisualDescriptor[] | undefined;
+    let visualFeatureModel: MediaItem['visualFeatureModel'];
     const fileUrl = URL.createObjectURL(file);
 
     if (mediaType === 'video') {
@@ -306,6 +327,16 @@ export async function processCreatorFiles(
       thumbnailUrl = meta.thumbnailUrl;
       previewDataUrl = meta.thumbnailUrl || undefined;
       timelineFrames = meta.timelineFrames;
+      const visualFrames = timelineFrames.filter((frame) => frame.kind === 'video-frame' && frame.thumbnailUrl);
+      for (const frame of visualFrames) {
+        try {
+          frame.visualDescriptors = await createVisualDescriptors(frame.thumbnailUrl || '', 'coarse');
+          frame.visualFeatureModel = await createLocalFeatureIndex(frame.thumbnailUrl || '');
+        } catch (error) {
+          console.warn('Video visual index failed:', error);
+        }
+      }
+      visualDescriptors = visualFrames.flatMap((frame) => frame.visualDescriptors || []);
     } else if (mediaType === 'audio') {
       const meta = await captureAudioMetadata(file);
       duration = meta.duration;
@@ -314,6 +345,12 @@ export async function processCreatorFiles(
     } else if (mediaType === 'image') {
       thumbnailUrl = fileUrl;
       previewDataUrl = await imageFileToPreview(file);
+      try {
+        visualDescriptors = await createVisualDescriptors(previewDataUrl || fileUrl);
+        visualFeatureModel = await createLocalFeatureIndex(previewDataUrl || fileUrl);
+      } catch (error) {
+        console.warn('Image visual index failed:', error);
+      }
       onProgress?.(index + 1, total, `本地识别人脸：${file.name}`);
       try {
         faces = await detectFaces(file);
@@ -337,6 +374,8 @@ export async function processCreatorFiles(
       item: {
         id: `media-${Date.now()}-${index}`,
         originalName: file.name,
+        projectPath,
+        pathKind,
         size: file.size,
         mediaType,
         extension,
@@ -358,6 +397,8 @@ export async function processCreatorFiles(
         status: 'pending',
         analysisSource: 'local',
         analysisWarning: [documentWarning, faceWarning].filter(Boolean).join('；') || undefined,
+        visualDescriptors,
+        visualFeatureModel,
         createdAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       },
     });
@@ -479,44 +520,13 @@ export async function createQueryEmbedding(query: string, settings: AISettings):
 
 export async function createVisualSearchQuery(
   file: File,
-  settings: AISettings,
-): Promise<{ query: string; previewUrl: string }> {
+): Promise<{ query: VisualContainmentQuery; previewUrl: string }> {
   if (!file.type.startsWith('image/')) throw new Error('请选择 JPG、PNG、WEBP 等图片文件。');
-  if (!settings.enableCloudAI || !settings.enableVision || !settings.visionModel.trim()) {
-    throw new Error('请先在模型配置中启用视觉理解并填写视觉模型。');
-  }
-
   const previewUrl = await imageFileToPreview(file);
   if (!previewUrl) throw new Error('图片读取失败，请换一张图片重试。');
-  const response = await fetch('/api/analyze', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      filesMeta: [{
-        id: 'visual-search-query',
-        name: file.name,
-        mediaType: 'image',
-        previewDataUrl: previewUrl,
-      }],
-      customApiKey: settings.apiKey,
-      customBaseUrl: settings.baseUrl,
-      model: settings.model,
-      visionModel: settings.visionModel,
-      enableCloudAI: true,
-      enableVision: true,
-      enableTextOrganization: false,
-    }),
-  });
-  const payload = await readApiResponse<BatchAnalysisResult[]>(response);
-  const result = payload.results?.[0];
-  if (!result) throw new Error('视觉模型没有返回可用于检索的内容。');
-
-  const tags = (result.tags || []).map((tag) => tag.replace(/^#/, '').trim()).filter(Boolean);
-  const ocr = result.ocrText?.trim();
-  const fallback = result.visualDescription?.trim() || result.proofreadText?.trim();
-  const query = [...tags, ocr].filter(Boolean).join(' ').trim() || fallback || '';
-  if (!query || /^(未识别到|未生成)/.test(query)) throw new Error('没有从图片中提取到有效的检索线索。');
-  return { query: query.slice(0, 260), previewUrl };
+  const query = await createVisualContainmentQuery(previewUrl);
+  if (!query) throw new Error('无法建立图片视觉特征，请换一张图片重试。');
+  return { query, previewUrl };
 }
 
 export function cosineSimilarity(left?: number[], right?: number[]): number {

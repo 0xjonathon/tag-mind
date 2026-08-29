@@ -29,6 +29,12 @@ export interface TimelineFrame {
   thumbnailUrl?: string;
   label?: string;
   description?: string;
+  visualDescriptors?: number[][];
+  visualFeatureModel?: {
+    width: number;
+    height: number;
+    features: Array<{ x: number; y: number; descriptor: number[] }>;
+  };
   kind: 'video-frame' | 'audio-waveform';
 }
 
@@ -72,6 +78,8 @@ export interface CreatorDimensions {
 export interface MediaItem {
   id: string;
   originalName: string;         // 原始文件名（绝不修改原名）
+  projectPath: string;          // 导入项目中的相对路径；桌面宿主可提供绝对路径
+  pathKind: 'absolute' | 'relative' | 'filename';
   size: number;
   mediaType: MediaType;         // 视频 / 音频 / 图片 / 文档 / 其他
   extension: string;
@@ -89,6 +97,12 @@ export interface MediaItem {
   analysisSource?: AnalysisSource;
   analysisWarning?: string;
   embedding?: number[];
+  visualDescriptors?: number[][];  // 本地像素视觉索引，不包含文字语义
+  visualFeatureModel?: {
+    width: number;
+    height: number;
+    features: Array<{ x: number; y: number; descriptor: number[] }>;
+  };                              // 本地局部特征索引，用于元素包含定位
   duration?: number;            // 时长（秒）
   durationFormatted?: string;   // 时长格式化 (如 "01:23")
   resolution?: string;          // 分辨率 (如 "1920x1080")

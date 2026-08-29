@@ -156,7 +156,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           {isSearchOrganizing || isVoiceOrganizing || isImageAnalyzing ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
         </button>
       </div>
-      {(voiceError || isListening || isImageAnalyzing) && <p className={`hero-search-note ${voiceError ? 'is-error' : ''}`}>{voiceError || (isImageAnalyzing ? '正在提取图片中的人物、场景、动作与文字…' : '正在倾听，说出你想找的内容…')}</p>}
+      {(voiceError || isListening || isImageAnalyzing) && <p className={`hero-search-note ${voiceError ? 'is-error' : ''}`}>{voiceError || (isImageAnalyzing ? '正在直接比对图片与视频关键帧…' : '正在倾听，说出你想找的内容…')}</p>}
     </div>
   );
 };

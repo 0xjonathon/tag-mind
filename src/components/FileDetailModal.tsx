@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import React, { useMemo, useRef, useState } from 'react';
-import { Check, Clock3, Copy, Eye, FileText, Film, Music, Play, ShieldCheck, Sparkles, UsersRound, X } from 'lucide-react';
+import { Check, Clock3, Copy, ExternalLink, Eye, FileText, Film, FolderOpen, Music, Play, ShieldCheck, Sparkles, UsersRound, X } from 'lucide-react';
 import { CreatorCategory, MediaItem, TimelineFrame } from '@/types/file';
 import { formatFileSize } from '@/lib/creatorParsers';
 import { HighlightedText } from '@/components/HighlightedText';
@@ -28,12 +28,22 @@ const parseTime = (value?: string | number) => {
   return typeof value === 'number' ? value : value.split(':').map(Number).reduce((total, part) => total * 60 + part, 0);
 };
 
+type DesktopPathBridge = {
+  showItemInFolder?: (path: string) => void | Promise<void>;
+};
+
+type DesktopWindow = Window & {
+  electronAPI?: DesktopPathBridge;
+  tagMindDesktop?: DesktopPathBridge;
+};
+
 export const FileDetailModal: React.FC<FileDetailModalProps> = ({ file, searchQuery, onClose, onUpdateFile }) => {
   const [category, setCategory] = useState<CreatorCategory>(file.category);
   const [proofreadText, setProofreadText] = useState(file.proofreadText);
   const [tags, setTags] = useState(file.tags);
   const [newTag, setNewTag] = useState('');
   const [copied, setCopied] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null);
 
   const seek = (value?: string | number) => {
@@ -58,6 +68,11 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({ file, searchQu
   const people = useMemo(() => Array.from(
     new Map((file.faces || []).filter((face) => face.personId).map((face) => [face.personId, face])).values(),
   ), [file.faces]);
+  const desktopPathBridge = typeof window === 'undefined'
+    ? undefined
+    : (window as DesktopWindow).tagMindDesktop || (window as DesktopWindow).electronAPI;
+  const canRevealFile = file.pathKind === 'absolute' && Boolean(desktopPathBridge?.showItemInFolder);
+  const pathLabel = file.pathKind === 'absolute' ? '本地绝对路径' : file.pathKind === 'relative' ? '文件夹内路径' : '本地路径';
 
   const timelineCaption = (frame: TimelineFrame) => {
     if (frame.kind === 'video-frame') {
@@ -80,6 +95,21 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({ file, searchQu
   const save = () => {
     onUpdateFile({ ...file, category, proofreadText, tags });
     onClose();
+  };
+
+  const copyPath = async () => {
+    await navigator.clipboard.writeText(file.projectPath);
+    setPathCopied(true);
+    window.setTimeout(() => setPathCopied(false), 1600);
+  };
+
+  const openOrRevealFile = () => {
+    if (canRevealFile && desktopPathBridge?.showItemInFolder) {
+      void desktopPathBridge.showItemInFolder(file.projectPath);
+      return;
+    }
+    if (!file.fileUrl) return;
+    window.open(file.fileUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -109,6 +139,18 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({ file, searchQu
                   <div className="mt-1 truncate font-mono text-[12px] text-white/80"><HighlightedText text={value} query={searchQuery} /></div>
                 </div>
               ))}
+            </div>
+
+            <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-white/40"><FolderOpen className="h-3.5 w-3.5" />{pathLabel}</div>
+              {file.pathKind === 'filename' ? (
+                <div className="rounded-lg border border-amber-200/15 bg-amber-100/10 px-3 py-2 text-[10px] leading-5 text-amber-100/70">当前为单文件网页导入，浏览器没有提供其所在目录。请使用首页的“导入文件夹”以保留目录层级。</div>
+              ) : <div className="break-all font-mono text-[11px] leading-5 text-white/75" title={file.projectPath}>{file.projectPath}</div>}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {file.pathKind !== 'filename' && <button type="button" onClick={() => void copyPath()} className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-[10px] font-bold text-white/75 transition hover:bg-white/15 hover:text-white">{pathCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{pathCopied ? '已复制路径' : '复制路径'}</button>}
+                {(canRevealFile || file.fileUrl) && <button type="button" onClick={openOrRevealFile} className="flex items-center gap-1.5 rounded-lg bg-[#ddf36a] px-3 py-2 text-[10px] font-bold text-[#16231f] transition hover:bg-[#e7f884]">{canRevealFile ? <FolderOpen className="h-3.5 w-3.5" /> : <ExternalLink className="h-3.5 w-3.5" />}{canRevealFile ? '在文件夹中显示' : '打开文件'}</button>}
+              </div>
+              {file.pathKind === 'relative' && <p className="mt-2 text-[9px] leading-4 text-white/35">这是所选文件夹内的真实相对路径；网页安全机制不会暴露磁盘绝对路径。</p>}
             </div>
 
             {people.length > 0 && (

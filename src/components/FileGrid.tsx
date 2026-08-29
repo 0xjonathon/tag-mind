@@ -2,13 +2,14 @@
 /* eslint-disable @next/next/no-img-element */
 
 import React, { useState } from 'react';
-import { AlertTriangle, AudioLines, BrainCircuit, Clock3, FileText, Image as ImageIcon, LayoutGrid, List, Play, ScanSearch, Trash2, Video } from 'lucide-react';
+import { AlertTriangle, AudioLines, BrainCircuit, Check, Clock3, Copy, FileText, FolderOpen, Image as ImageIcon, LayoutGrid, List, Play, ScanSearch, Trash2, Video } from 'lucide-react';
 import { MediaItem, MediaType } from '@/types/file';
 import { formatFileSize } from '@/lib/creatorParsers';
 import { HighlightedText } from '@/components/HighlightedText';
 import { fuzzyMatch } from '@/lib/fuzzySearch';
+import { bestVisualSimilarity, VisualDescriptor } from '@/lib/visualSearch';
 
-interface FileGridProps { files: MediaItem[]; searchQuery: string; onSelectFile: (file: MediaItem) => void; onDeleteFile: (fileId: string) => void; }
+interface FileGridProps { files: MediaItem[]; searchQuery: string; visualQueryDescriptor?: VisualDescriptor | null; visualScores?: Record<string, number>; onSelectFile: (file: MediaItem) => void; onDeleteFile: (fileId: string) => void; }
 
 function MediaIcon({ type }: { type: MediaType }) {
   if (type === 'video') return <Video className="h-4 w-4" />;
@@ -35,8 +36,16 @@ const TYPE_STYLE: Record<MediaType, { bg: string; badge: string; label: string }
   other: { bg: 'bg-[#313345]', badge: 'bg-[#c5b8ff]', label: '其他' },
 };
 
-export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelectFile, onDeleteFile }) => {
+export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, visualQueryDescriptor, visualScores, onSelectFile, onDeleteFile }) => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [copiedPathId, setCopiedPathId] = useState<string | null>(null);
+
+  const copyPath = async (event: React.MouseEvent, file: MediaItem) => {
+    event.stopPropagation();
+    await navigator.clipboard.writeText(file.projectPath);
+    setCopiedPathId(file.id);
+    window.setTimeout(() => setCopiedPathId((current) => current === file.id ? null : current), 1600);
+  };
 
   if (files.length === 0) return (
     <div className="app-panel flex min-h-56 flex-col items-center justify-center rounded-[22px] p-8 text-center">
@@ -60,20 +69,25 @@ export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelect
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {files.map((file) => {
             const style = TYPE_STYLE[file.mediaType];
+            const visiblePath = file.pathKind === 'filename' ? '未获得所在目录 · 请用“导入文件夹”' : file.projectPath;
             const people = Array.from(new Map((file.faces || []).filter((face) => face.personId).map((face) => [face.personId, face])).values());
-            const matchedFrame = searchQuery
-              ? file.timelineFrames?.find((frame) => frame.description && fuzzyMatch(frame.description, searchQuery))
-              : undefined;
+            const matchedFrame = visualQueryDescriptor
+              ? file.timelineFrames
+                ?.filter((frame) => frame.visualDescriptors?.length)
+                .sort((left, right) => bestVisualSimilarity(visualQueryDescriptor, right.visualDescriptors) - bestVisualSimilarity(visualQueryDescriptor, left.visualDescriptors))[0]
+              : searchQuery
+                ? file.timelineFrames?.find((frame) => frame.description && fuzzyMatch(frame.description, searchQuery))
+                : undefined;
             const summary = matchedFrame
-              ? `[${matchedFrame.timeFormatted}] ${matchedFrame.description}`
+              ? `[${matchedFrame.timeFormatted}] ${matchedFrame.description || '视觉相似画面'}`
               : file.visualDescription || file.proofreadText || '等待内容分析';
             return (
               <article key={file.id} onClick={() => onSelectFile(file)} className="group overflow-hidden rounded-[20px] border border-[#d8d3c8] bg-[#fffdf8] p-2.5 shadow-[0_8px_28px_rgba(22,35,31,.055)] transition hover:-translate-y-1 hover:border-[#16231f]/40 hover:shadow-[0_18px_38px_rgba(22,35,31,.12)]">
                 <div className={`relative flex aspect-[16/10] items-center justify-center overflow-hidden rounded-[14px] ${style.bg} text-white`}>
-                  {file.thumbnailUrl ? <img src={file.thumbnailUrl} alt={file.originalName} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.035]" /> : file.mediaType === 'audio' ? <div className="flex h-16 items-center gap-1.5 text-[#ff8b6a]">{[22, 42, 62, 35, 72, 48, 25, 58, 39, 66, 31].map((height, index) => <span key={index} className="w-1 rounded-full bg-current" style={{ height }} />)}</div> : <MediaIcon type={file.mediaType} />}
+                  {(matchedFrame?.thumbnailUrl || file.thumbnailUrl) ? <img src={matchedFrame?.thumbnailUrl || file.thumbnailUrl} alt={file.originalName} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.035]" /> : file.mediaType === 'audio' ? <div className="flex h-16 items-center gap-1.5 text-[#ff8b6a]">{[22, 42, 62, 35, 72, 48, 25, 58, 39, 66, 31].map((height, index) => <span key={index} className="w-1 rounded-full bg-current" style={{ height }} />)}</div> : <MediaIcon type={file.mediaType} />}
                   <div className="absolute inset-x-0 top-0 flex items-center justify-between p-2.5">
                     <span className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-extrabold text-[#16231f] ${style.badge}`}><MediaIcon type={file.mediaType} /><HighlightedText text={style.label} query={searchQuery} /></span>
-                    <span className="flex items-center gap-1 rounded-lg bg-[#16231f]/82 px-2 py-1.5 text-[9px] font-bold text-white backdrop-blur"><BrainCircuit className="h-3 w-3 text-[#ddf36a]" />{sourceLabel(file)}</span>
+                    <span className="flex items-center gap-1 rounded-lg bg-[#16231f]/82 px-2 py-1.5 text-[9px] font-bold text-white backdrop-blur"><BrainCircuit className="h-3 w-3 text-[#ddf36a]" />{visualScores ? `视觉相似 ${Math.round((visualScores[file.id] || 0) * 100)}%` : sourceLabel(file)}</span>
                   </div>
                   {file.mediaType === 'video' && <div className="absolute inset-0 grid place-items-center bg-[#16231f]/10 opacity-0 transition group-hover:opacity-100"><span className="grid h-11 w-11 place-items-center rounded-full bg-[#ddf36a] text-[#16231f] shadow-xl"><Play className="ml-0.5 h-4 w-4 fill-current" /></span></div>}
                   {people.length > 0 && (
@@ -90,6 +104,9 @@ export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelect
                     <div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-extrabold" title={file.originalName}><HighlightedText text={file.originalName} query={searchQuery} /></h3><p className="mt-1.5 font-mono text-[9px] uppercase tracking-[.08em] text-[#8d9690]"><HighlightedText text={file.extension} query={searchQuery} /> · {formatFileSize(file.size)}</p></div>
                     <button aria-label={`移除 ${file.originalName}`} onClick={(event) => { event.stopPropagation(); onDeleteFile(file.id); }} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#9ba39f] opacity-0 transition hover:bg-[#ffe6dd] hover:text-[#b95034] group-hover:opacity-100"><Trash2 className="h-4 w-4" /></button>
                   </div>
+                  {file.pathKind === 'filename' ? <div title="浏览器未提供本地目录" className="mt-2 flex w-full items-center gap-1.5 rounded-lg bg-[#fff1d8] px-2.5 py-2 text-left text-[9px] text-[#8a6527]"><FolderOpen className="h-3 w-3 shrink-0" /><span className="truncate">{visiblePath}</span></div> : <button type="button" title={file.projectPath} onClick={(event) => void copyPath(event, file)} className="mt-2 flex w-full items-center gap-1.5 rounded-lg bg-[#f0ede5] px-2.5 py-2 text-left font-mono text-[9px] text-[#707b75] transition hover:bg-[#e5eee9] hover:text-[#1f6f5f]">
+                    {copiedPathId === file.id ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}<span className="truncate">{copiedPathId === file.id ? '路径已复制' : visiblePath}</span>
+                  </button>}
                   {file.analysisWarning && <div className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-[#eed7a6] bg-[#fff4d8] px-2.5 py-2 text-[11px] font-semibold text-[#825b19]"><AlertTriangle className="h-3.5 w-3.5" />查看处理说明</div>}
                   <p className="mt-3 line-clamp-2 min-h-11 text-[12px] leading-[1.8] text-[#68746f]"><HighlightedText text={summary} query={searchQuery} /></p>
                   <div className="mt-3 flex items-center gap-1.5 overflow-hidden"><span className="shrink-0 rounded-lg bg-[#e7e2d7] px-2.5 py-1.5 text-[10px] font-bold"><HighlightedText text={file.category} query={searchQuery} /></span>{file.tags.slice(0, 2).map((tag) => <span key={tag} className="truncate rounded-lg border border-[#e1dcd1] px-2.5 py-1.5 text-[10px] text-[#68746f]"><HighlightedText text={tag} query={searchQuery} /></span>)}</div>
@@ -102,7 +119,7 @@ export const FileGrid: React.FC<FileGridProps> = ({ files, searchQuery, onSelect
         <div className="app-panel overflow-x-auto rounded-[20px]">
           <div className="min-w-[820px]">
             <div className="grid grid-cols-[minmax(220px,1.2fr)_130px_minmax(220px,1fr)_110px_36px] gap-4 border-b border-[#ded9ce] bg-[#ede8de] px-5 py-3 text-[9px] font-extrabold uppercase tracking-[.14em] text-[#7d8882]"><span>素材</span><span>分类</span><span>内容摘要</span><span>规格</span><span /></div>
-            {files.map((file) => <div key={file.id} role="button" tabIndex={0} onClick={() => onSelectFile(file)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectFile(file); }} className="group grid grid-cols-[minmax(220px,1.2fr)_130px_minmax(220px,1fr)_110px_36px] items-center gap-4 border-b border-[#e7e2d8] px-5 py-3.5 transition last:border-0 hover:bg-[#f7f3eb]"><div className="flex min-w-0 items-center gap-3"><div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[#16231f] ${TYPE_STYLE[file.mediaType].badge}`}><MediaIcon type={file.mediaType} /></div><div className="min-w-0"><div className="truncate text-[12px] font-extrabold"><HighlightedText text={file.originalName} query={searchQuery} /></div><div className="mt-1 text-[9px] uppercase text-[#929a95]">{sourceLabel(file)}</div></div></div><span className="text-[11px] font-semibold text-[#5e6a64]"><HighlightedText text={file.category} query={searchQuery} /></span><span className="truncate text-[11px] text-[#717c76]"><HighlightedText text={file.visualDescription || file.proofreadText} query={searchQuery} /></span><span className="flex items-center gap-1 font-mono text-[10px] text-[#7f8983]"><Clock3 className="h-3 w-3" />{file.durationFormatted || file.resolution || formatFileSize(file.size)}</span><button aria-label={`移除 ${file.originalName}`} onClick={(event) => { event.stopPropagation(); onDeleteFile(file.id); }} className="grid h-8 w-8 place-items-center rounded-lg text-[#98a09c] hover:bg-[#ffe6dd] hover:text-[#b95034]"><Trash2 className="h-4 w-4" /></button></div>)}
+            {files.map((file) => <div key={file.id} role="button" tabIndex={0} onClick={() => onSelectFile(file)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectFile(file); }} className="group grid grid-cols-[minmax(220px,1.2fr)_130px_minmax(220px,1fr)_110px_36px] items-center gap-4 border-b border-[#e7e2d8] px-5 py-3.5 transition last:border-0 hover:bg-[#f7f3eb]"><div className="flex min-w-0 items-center gap-3"><div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[#16231f] ${TYPE_STYLE[file.mediaType].badge}`}><MediaIcon type={file.mediaType} /></div><div className="min-w-0"><div className="truncate text-[12px] font-extrabold"><HighlightedText text={file.originalName} query={searchQuery} /></div>{file.pathKind === 'filename' ? <div className="mt-1 flex max-w-full items-center gap-1 text-[9px] text-[#9a742f]"><FolderOpen className="h-3 w-3 shrink-0" /><span className="truncate">未获得所在目录</span></div> : <button type="button" title={file.projectPath} onClick={(event) => void copyPath(event, file)} className="mt-1 flex max-w-full items-center gap-1 font-mono text-[9px] text-[#929a95] hover:text-[#1f6f5f]">{copiedPathId === file.id ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}<span className="truncate">{copiedPathId === file.id ? '路径已复制' : file.projectPath}</span></button>}</div></div><span className="text-[11px] font-semibold text-[#5e6a64]"><HighlightedText text={file.category} query={searchQuery} /></span><span className="truncate text-[11px] text-[#717c76]"><HighlightedText text={file.visualDescription || file.proofreadText} query={searchQuery} /></span><span className="flex items-center gap-1 font-mono text-[10px] text-[#7f8983]"><Clock3 className="h-3 w-3" />{file.durationFormatted || file.resolution || formatFileSize(file.size)}</span><button aria-label={`移除 ${file.originalName}`} onClick={(event) => { event.stopPropagation(); onDeleteFile(file.id); }} className="grid h-8 w-8 place-items-center rounded-lg text-[#98a09c] hover:bg-[#ffe6dd] hover:text-[#b95034]"><Trash2 className="h-4 w-4" /></button></div>)}
           </div>
         </div>
       )}

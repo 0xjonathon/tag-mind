@@ -35,6 +35,7 @@ export function mediaSearchText(file: MediaItem): string {
   const extension = file.extension.trim().toLocaleLowerCase().replace(/^\./, '');
   return [
     file.originalName,
+    file.projectPath,
     MEDIA_TYPE_TERMS[file.mediaType].join(' '),
     extension,
     EXTENSION_TERMS[extension]?.join(' '),
@@ -75,8 +76,10 @@ function levenshteinWithin(left: string, right: string, limit: number): boolean 
 }
 
 function fuzzyTokenMatch(queryToken: string, candidate: string): boolean {
+  if (queryToken === candidate) return true;
+  // NBA、AI、4K 等短词承担明确实体含义，不能用子串或错字容错扩大命中。
+  if (queryToken.length <= 3 || candidate.length <= 3) return false;
   if (candidate.includes(queryToken) || queryToken.includes(candidate)) return true;
-  if (queryToken.length < 3 || candidate.length < 3) return false;
   const limit = queryToken.length >= 7 ? 2 : 1;
   return levenshteinWithin(queryToken, candidate, limit);
 }
@@ -88,7 +91,12 @@ function queryMatchStats(text: string, query: string) {
   if (!normalizedQuery || !queryUnits.length) {
     return { normalizedText, normalizedQuery, queryUnits, matchedUnits: 0, score: 1 };
   }
-  if (normalizedText.includes(normalizedQuery)) {
+  const shortLatinQuery = /^[a-z0-9]{1,3}$/i.test(normalizedQuery);
+  const exactTextTokens: string[] = normalizedText.match(LATIN_TOKEN) || [];
+  const hasExactMatch = shortLatinQuery
+    ? exactTextTokens.includes(normalizedQuery)
+    : normalizedText.includes(normalizedQuery);
+  if (hasExactMatch) {
     return { normalizedText, normalizedQuery, queryUnits, matchedUnits: queryUnits.length, score: 1 };
   }
 
@@ -114,9 +122,9 @@ export function fuzzyMatchScore(text: string, query: string): number {
 }
 
 export function fuzzyMatch(text: string, query: string): boolean {
-  const { normalizedText, normalizedQuery, queryUnits, matchedUnits } = queryMatchStats(text, query);
+  const { normalizedQuery, queryUnits, matchedUnits, score } = queryMatchStats(text, query);
   if (!normalizedQuery) return true;
-  if (normalizedText.includes(normalizedQuery)) return true;
+  if (score === 1) return true;
 
   // 短查询保持严格；长句保证至少两个有效词命中，避免口语噪声拖垮召回。
   const requiredMatches = queryUnits.length <= 2
