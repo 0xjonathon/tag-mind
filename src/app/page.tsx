@@ -317,6 +317,7 @@ export default function Home() {
             candidateSources,
             file.visualDescriptors,
             indexedFeatureModels,
+            file.faces,
           );
           if (!cancelled && visualMatchRequestRef.current === requestId) setVisualScores({ ...scores });
         }
@@ -332,13 +333,11 @@ export default function Home() {
 
   const visualCutoff = useMemo(() => {
     const scores = Object.values(visualScores).filter((score) => typeof score === 'number' && score > 0);
-    if (scores.length === 0) return 0.45;
+    if (scores.length === 0) return 0.55;
     const best = Math.max(...scores);
-    if (best >= 0.85) return Math.max(0.60, best - 0.18);
-    if (best >= 0.72) return Math.max(0.50, best - 0.15);
-    if (best >= 0.58) return Math.max(0.40, best - 0.12);
-    if (best >= 0.45) return Math.max(0.32, best - 0.10);
-    return Math.max(0.25, best - 0.08);
+    if (best >= 0.75) return Math.max(0.58, best - 0.14);
+    if (best >= 0.60) return Math.max(0.52, best - 0.08);
+    return 0.55;
   }, [visualScores]);
 
   const semanticCutoff = useMemo(() => {

@@ -526,6 +526,14 @@ export async function createVisualSearchQuery(
   if (!previewUrl) throw new Error('图片读取失败，请换一张图片重试。');
   const query = await createVisualContainmentQuery(previewUrl);
   if (!query) throw new Error('无法建立图片视觉特征，请换一张图片重试。');
+  try {
+    const faces = await detectFaces(file);
+    if (faces.length > 0) {
+      query.faceDescriptors = faces.map((face) => face.descriptor);
+    }
+  } catch (error) {
+    console.warn('Query face detection skipped:', error);
+  }
   return { query, previewUrl };
 }
 

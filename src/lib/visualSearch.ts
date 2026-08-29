@@ -1,3 +1,6 @@
+import { descriptorDistance } from './faceRecognition';
+import { FaceIndexEntry } from '@/types/file';
+
 export type VisualDescriptor = number[];
 
 type BinaryFeature = {
@@ -17,6 +20,7 @@ export interface VisualContainmentQuery {
   descriptor: VisualDescriptor;
   aspectRatio: number;
   localFeatures?: LocalFeatureModel;
+  faceDescriptors?: number[][];
 }
 
 const SAMPLE_SIZE = 32;
@@ -695,22 +699,26 @@ export function visualSimilarity(left?: VisualDescriptor, right?: VisualDescript
   const hogStart = histogramStart + histogramLength;
   const hogLength = HOG_GRID * HOG_GRID * HOG_BINS;
 
-  // 1. 空间色彩相似度
+  // 1. 空间色彩相似度（非线性加权，严格惩罚颜色与空间布局差异）
   let colorDistance = 0;
   for (let index = 0; index < colorLength; index += 1) colorDistance += (left[index] - right[index]) ** 2;
-  const colorScore = Math.max(0, 1 - Math.sqrt(colorDistance / colorLength));
+  const normalizedColorDist = Math.sqrt(colorDistance / colorLength);
+  const colorScore = Math.max(0, 1 - normalizedColorDist * 1.8) ** 2;
 
-  // 2. 结构亮度相似度 (NCC)
-  const structureScore = (cosine(left, right, colorLength, structureLength) + 1) / 2;
+  // 2. 结构亮度相似度 (NCC, 过滤弱相关与负相关基底)
+  const rawStructureCos = cosine(left, right, colorLength, structureLength);
+  const structureScore = Math.max(0, (rawStructureCos - 0.25) / 0.75) ** 2;
 
-  // 3. 全局色彩分布直方图交集 (平移不变)
-  let histogramScore = 0;
+  // 3. 全局色彩分布直方图交集 (减去随机重合基底)
+  let histogramOverlap = 0;
   for (let index = histogramStart; index < histogramStart + histogramLength; index += 1) {
-    histogramScore += Math.min(left[index], right[index]);
+    histogramOverlap += Math.min(left[index], right[index]);
   }
+  const histogramScore = Math.max(0, (histogramOverlap - 0.38) / 0.62) ** 2;
 
   // 4. HOG 梯度方向轮廓相似度
-  const hogScore = (cosine(left, right, hogStart, hogLength) + 1) / 2;
+  const rawHogCos = cosine(left, right, hogStart, hogLength);
+  const hogScore = Math.max(0, (rawHogCos - 0.20) / 0.80) ** 2;
 
   return colorScore * 0.25 + structureScore * 0.25 + histogramScore * 0.20 + hogScore * 0.30;
 }
@@ -728,7 +736,37 @@ export async function containedVisualSimilarity(
   candidateSources: string[],
   fallbackDescriptors?: VisualDescriptor[],
   indexedFeatureModels?: Array<LocalFeatureModel | undefined>,
+  candidateFaces?: FaceIndexEntry[],
 ): Promise<number> {
+  // 1. 若检索图包含人脸：优先以高精度 128 维深度人脸向量进行身份比对
+  if (query.faceDescriptors && query.faceDescriptors.length > 0) {
+    if (candidateFaces && candidateFaces.length > 0) {
+      let minDistance = Infinity;
+      for (const queryFace of query.faceDescriptors) {
+        for (const candidateFace of candidateFaces) {
+          const distance = descriptorDistance(queryFace, candidateFace.descriptor);
+          if (distance < minDistance) minDistance = distance;
+        }
+      }
+
+      // 人脸欧氏距离判断：
+      // <= 0.44: 极高置信度同一人 (0.90 ~ 0.99)
+      // <= 0.54: 确认为同一人 (0.78 ~ 0.89)
+      // <= 0.58: 临界可能同一人 (0.65)
+      // > 0.58: 明确为不同人物！硬拒绝，直接返回 0.02
+      if (minDistance <= 0.44) {
+        return Math.min(0.99, 0.90 + (0.44 - minDistance) * 0.20);
+      }
+      if (minDistance <= 0.54) {
+        return Math.min(0.89, 0.78 + (0.54 - minDistance) * 1.10);
+      }
+      if (minDistance <= 0.58) {
+        return 0.65;
+      }
+      return 0.02;
+    }
+  }
+
   let best = bestVisualSimilarity(query.descriptor, fallbackDescriptors);
   let bestLocalFeatureScore = 0;
   const workspace = createWorkspace();
@@ -738,7 +776,7 @@ export async function containedVisualSimilarity(
     try {
       const image = await loadImage(source);
 
-      // 1. 局部关键点特征几何验证
+      // 2. 局部关键点特征几何验证
       const localFeatureScore = featureContainmentScore(
         query.localFeatures,
         indexedFeatureModels?.[sourceIndex] || extractLocalFeatureModel(image, BASE_CROPS[0], false),
@@ -747,7 +785,7 @@ export async function containedVisualSimilarity(
       best = Math.max(best, localFeatureScore);
       if (localFeatureScore >= 0.88) return localFeatureScore;
 
-      // 2. 密集多尺度/多长宽比滑动窗口扫描
+      // 3. 密集多尺度/多长宽比滑动窗口扫描
       const crops = createContainmentCrops(image, query.aspectRatio);
       const strongest: Array<{ score: number; crop: Crop }> = [];
       const remember = (score: number, crop: Crop) => {
@@ -769,7 +807,7 @@ export async function containedVisualSimilarity(
         }
       }
 
-      // 3. 在最强响应区域周围做位置与尺寸微调 (Fine Sub-pixel Refinement)
+      // 4. 在最强响应区域周围做位置与尺寸微调 (Fine Sub-pixel Refinement)
       for (const { crop } of [...strongest]) {
         const centerX = crop.x + crop.width / 2;
         const centerY = crop.y + crop.height / 2;
@@ -794,9 +832,8 @@ export async function containedVisualSimilarity(
     }
   }
 
-  // 4. 多路特征融合决策（移除破坏性的截断逻辑）
+  // 5. 多路特征融合决策
   if (bestLocalFeatureScore >= 0.65 && best >= 0.60) {
-    // 关键点几何一致性与滑窗密集描述符相互印证，置信度增强
     return Math.min(0.99, Math.max(bestLocalFeatureScore, best) + 0.08);
   }
 

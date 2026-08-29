@@ -83,7 +83,7 @@ export async function detectFaces(file: File): Promise<FaceIndexEntry[]> {
   }
 }
 
-function descriptorDistance(left: number[], right: number[]): number {
+export function descriptorDistance(left: number[], right: number[]): number {
   if (!left.length || left.length !== right.length) return Number.POSITIVE_INFINITY;
   let squared = 0;
   for (let index = 0; index < left.length; index += 1) squared += (left[index] - right[index]) ** 2;
